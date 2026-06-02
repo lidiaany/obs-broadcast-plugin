@@ -1,5 +1,15 @@
 # 📺 Broadcast Overlay System — Plugin Nativo para OBS Studio
 
+<div align="center">
+
+[![CI/CD](https://github.com/lidiany/obs-broadcast-plugin/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/lidiany/obs-broadcast-plugin/actions/workflows/build.yml)
+[![License: GPL v2](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](LICENSE)
+[![OBS Studio](https://img.shields.io/badge/OBS%20Studio-29%2B-%234A7BB6?logo=obs-studio)](https://obsproject.com/)
+[![C++17](https://img.shields.io/badge/C%2B%2B-17-%2300599C?logo=cplusplus)](https://en.cppreference.com/w/cpp/17)
+[![GitHub Release](https://img.shields.io/github/v/release/lidiany/obs-broadcast-plugin?include_prereleases&label=release)](https://github.com/lidiany/obs-broadcast-plugin/releases)
+
+</div>
+
 **Broadcast Overlay System** é um plugin nativo C++ para OBS Studio que adiciona uma Source profissional de broadcast com:
 
 - **Lower Third** — Barra estilo TV/ESPN com nome e cargo
