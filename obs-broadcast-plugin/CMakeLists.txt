@@ -1,75 +1,60 @@
-# =============================================================================
-# OBS Broadcast Overlay System - CMake Build Configuration
-# =============================================================================
-# Plugin: Broadcast Overlay System (Lower Third, GC, Ticker, Social Media, WS)
-# Language: C++17
-# Build System: CMake 3.16+
-# API: libobs (OBS Studio SDK)
-# =============================================================================
-
 cmake_minimum_required(VERSION 3.16)
 
-# ── Project Name ────────────────────────────────────────────────────────────
 project(obs-broadcast-plugin VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# ── Build Type ──────────────────────────────────────────────────────────────
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING
-        "Build type (Debug, Release, RelWithDebInfo, MinSizeRel)" FORCE)
-endif()
+# ── Find OBS SDK ──────────────────────────────────────────────────────────
+find_package(libobs REQUIRED)
 
-# ── Source Files ────────────────────────────────────────────────────────────
-set(broadcast_SOURCES
-    plugin-main.cpp
-    broadcast-source.cpp
-    broadcast-source.h
-    graphics-render.cpp
-    properties.cpp
-    websocket-server.cpp
-    websocket-server.h
+# ── Sources ───────────────────────────────────────────────────────────────
+set(SOURCES
+    src/plugin-main.cpp
+    src/broadcast-source.cpp
+    src/graphics-render.cpp
+    src/properties.cpp
+    src/websocket-server.cpp
 )
 
-# ── Plugin Binary ───────────────────────────────────────────────────────────
-add_library(obs-broadcast-plugin MODULE
-    ${broadcast_SOURCES}
+set(HEADERS
+    src/broadcast-source.h
+    src/websocket-server.h
 )
 
-# ── Include Directories ────────────────────────────────────────────────────
-target_include_directories(obs-broadcast-plugin PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
+# ── Plugin library ────────────────────────────────────────────────────────
+add_library(${PROJECT_NAME} MODULE
+    ${SOURCES}
+    ${HEADERS}
 )
 
-# ── Link Libraries ─────────────────────────────────────────────────────────
-# libobs - OBS Studio's core SDK library
-target_link_libraries(obs-broadcast-plugin PRIVATE
-    libobs
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# ── Platform-Specific Libraries ────────────────────────────────────────────
+target_link_libraries(${PROJECT_NAME} PRIVATE
+    OBS::libobs
+)
+
+# ── Platform-specific ────────────────────────────────────────────────────
 if(WIN32)
-    # Windows: Winsock2 for WebSocket TCP networking
-    target_link_libraries(obs-broadcast-plugin PRIVATE
+    target_link_libraries(${PROJECT_NAME} PRIVATE
         ws2_32
+    )
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+        _CRT_SECURE_NO_WARNINGS
     )
 endif()
 
-if(APPLE)
-    # macOS may need additional network frameworks if needed
-    # target_link_libraries(obs-broadcast-plugin PRIVATE)
-endif()
-
-# ── Compiler Flags ──────────────────────────────────────────────────────────
+# ── Compiler flags ────────────────────────────────────────────────────────
 if(MSVC)
-    target_compile_options(obs-broadcast-plugin PRIVATE
+    target_compile_options(${PROJECT_NAME} PRIVATE
         /W3
         /utf-8
     )
 else()
-    target_compile_options(obs-broadcast-plugin PRIVATE
+    target_compile_options(${PROJECT_NAME} PRIVATE
         -Wall
         -Wextra
         -Wno-unused-parameter
@@ -77,56 +62,24 @@ else()
     )
 endif()
 
-# ── Platform Definitions ────────────────────────────────────────────────────
-if(WIN32)
-    target_compile_definitions(obs-broadcast-plugin PRIVATE
-        _CRT_SECURE_NO_WARNINGS
-    )
-endif()
+# ── Output naming ────────────────────────────────────────────────────────
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    PREFIX ""
+)
 
-# ── Output Naming ──────────────────────────────────────────────────────────
-if(APPLE)
-    set_target_properties(obs-broadcast-plugin PROPERTIES
-        SUFFIX ".so"
-        PREFIX ""
-    )
-elseif(WIN32)
-    set_target_properties(obs-broadcast-plugin PROPERTIES
-        PREFIX ""
-    )
-else()
-    set_target_properties(obs-broadcast-plugin PROPERTIES
-        PREFIX ""
-    )
-endif()
+# ── Install rules ────────────────────────────────────────────────────────
+install(TARGETS ${PROJECT_NAME}
+    LIBRARY DESTINATION obs-plugins
+    RUNTIME DESTINATION obs-plugins
+)
 
-# ── Install Rules ──────────────────────────────────────────────────────────
-if(COMMAND install_obs_plugin_with_data)
-    install_obs_plugin_with_data(obs-broadcast-plugin data)
-else()
-    if(APPLE)
-        install(TARGETS obs-broadcast-plugin
-            LIBRARY DESTINATION "Library/Application Support/obs-studio/plugins/obs-broadcast-plugin/bin"
-        )
-    elseif(WIN32)
-        install(TARGETS obs-broadcast-plugin
-            RUNTIME DESTINATION "obs-studio/plugins/obs-broadcast-plugin/bin/64bit"
-        )
-    else()
-        install(TARGETS obs-broadcast-plugin
-            LIBRARY DESTINATION "lib/obs-plugins"
-        )
-    endif()
+install(DIRECTORY data/
+    DESTINATION data/obs-plugins/${PROJECT_NAME}
+)
 
-    install(DIRECTORY data/
-        DESTINATION "share/obs/obs-plugins/obs-broadcast-plugin/data"
-    )
-endif()
-
-# ── Print Build Info ────────────────────────────────────────────────────────
 message(STATUS "========================================")
 message(STATUS "  OBS Broadcast Overlay Plugin v${PROJECT_VERSION}")
 message(STATUS "  Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "  C++ Standard: ${CMAKE_CXX_STANDARD}")
-message(STATUS "  WebSocket: built-in (porta configurável)")
+message(STATUS "  WebSocket: built-in (port ${WS_DEFAULT_PORT})")
 message(STATUS "========================================")
