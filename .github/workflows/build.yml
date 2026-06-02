@@ -129,15 +129,21 @@ jobs:
 
           # ── 2. Clone OBS headers (sparse checkout, only libobs/) ───────
           Write-Host "::group::Step 2 - Download OBS headers from source"
+          Write-Host "Cloning obs-studio (libobs/ only)..."
           git clone --depth 1 --filter=blob:none --sparse `
             https://github.com/obsproject/obs-studio.git `
-            "$extractPath\obs-src" 2>&1 | Select-String "Receiving|Receiving objects"
+            "$extractPath\obs-src" 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
+
           Push-Location "$extractPath\obs-src"
-          git sparse-checkout set libobs 2>&1 | Out-Null
+          git sparse-checkout set libobs
+          if ($LASTEXITCODE -ne 0) { throw "sparse-checkout failed" }
           Pop-Location
 
           $srcHeaders = "$extractPath\obs-src\libobs"
           $dstHeaders = "$extractPath\include\obs"
+          if (-not (Test-Path $srcHeaders)) { throw "libobs/ directory not found after clone" }
+
           Get-ChildItem $srcHeaders -Recurse -Filter "*.h" | ForEach-Object {
             $rel = $_.FullName.Substring($srcHeaders.Length + 1)
             $dir = Split-Path "$dstHeaders\$rel" -Parent
@@ -145,6 +151,7 @@ jobs:
             Copy-Item $_.FullName "$dstHeaders\$rel" -Force
           }
           $hCount = (Get-ChildItem $dstHeaders -Recurse -Filter "*.h" | Measure-Object).Count
+          if ($hCount -eq 0) { throw "No header files copied! Check git clone/sparse-checkout" }
           Write-Host "Copied $hCount header files"
           Remove-Item -Recurse -Force "$extractPath\obs-src"
           Write-Host "::endgroup::"
