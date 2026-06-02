@@ -75,7 +75,7 @@ jobs:
             shell: pwsh
             generator: Visual Studio 17 2022
             cmake-arch: '-A x64 -T host=x64'
-            cmake-prefix: ${{ github.workspace }}/obs-sdk/lib/cmake
+            cmake-prefix: ${{ github.workspace }}/obs-sdk/cmake
             artifact-suffix: windows-x64
             binary-glob: |
               build/**/obs-broadcast-plugin.dll
@@ -144,9 +144,29 @@ jobs:
           Write-Host "::group::Extracting OBS SDK"
           Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
           Remove-Item $zipPath -Force
-          Write-Host "Extracted to: $extractPath"
-          Get-ChildItem "$extractPath/obs-studio" | Select-Object Name
+          Write-Host "Extracted to: $extractPath"          Get-ChildItem $extractPath | Select-Object Name
           Write-Host "::endgroup::"
+
+      - name: Detect OBS CMake Path (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $possiblePaths = @(
+            "${{ github.workspace }}\obs-sdk\cmake",
+            "${{ github.workspace }}\obs-sdk\lib\cmake",
+            "${{ github.workspace }}\obs-sdk\obs-studio\cmake"
+          )
+
+          foreach ($p in $possiblePaths) {
+            if (Test-Path ("$p\libobs\libobsConfig.cmake")) {
+              echo "OBS_CMAKE_PATH=$p" >> $env:GITHUB_ENV
+              Write-Host "Found OBS CMake path: $p"
+              exit 0
+            }
+          }
+
+          Write-Error "Could not find OBS CMake path. Tried: $($possiblePaths -join ', ')"
+          exit 1
 
       - name: Install Dependencies (macOS)
         if: runner.os == 'macOS'
