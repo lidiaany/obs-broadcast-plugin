@@ -34,7 +34,7 @@ on:
       obs_version:
         description: 'OBS Studio version to build against'
         required: true
-        default: '31.0.2'
+        default: '32.1.2'
         type: string
 
 # ── Concurrency: cancel in-flight runs for the same PR ────────────────────
@@ -44,7 +44,8 @@ concurrency:
 
 # ── Environment Variables ────────────────────────────────────────────────
 env:
-  OBS_VERSION: ${{ inputs.obs_version || '31.0.2' }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  OBS_VERSION: ${{ inputs.obs_version || '32.1.2' }}
   PLUGIN_NAME: obs-broadcast-plugin
   CMAKE_BUILD_TYPE: RelWithDebInfo
 
@@ -129,7 +130,8 @@ jobs:
       - name: Install Dependencies (Windows)
         if: runner.os == 'Windows'
         run: |
-          $sdkUrl = "https://github.com/obsproject/obs-studio/releases/download/$env:OBS_VERSION/obs-studio-$env:OBS_VERSION-windows-x64.zip"
+          $tag = "$env:OBS_VERSION"
+          $sdkUrl = "https://github.com/obsproject/obs-studio/releases/download/${tag}/OBS-Studio-${tag}-Windows-x64.zip"
           $zipPath = "$env:TEMP\obs-sdk.zip"
           $extractPath = "${{ github.workspace }}\obs-sdk"
 
