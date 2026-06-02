@@ -1,386 +1,261 @@
+# =============================================================================
+# OBS Broadcast Overlay System — GitHub Actions CI/CD
+# =============================================================================
+# Builds the plugin on Windows, Linux (Ubuntu), and macOS with every push
+# and pull request. Uploads compiled binaries as build artifacts.
+#
+# OBS SDK Strategy:
+#   - Ubuntu:  libobs-dev from the official OBS PPA (apt)
+#   - Windows: Build OBS from source first (official approach for OBS 32+)
+#   - macOS:   OBS .app bundle via Homebrew cask (CMake config inside bundle)
+# =============================================================================
+
 name: CI/CD
 
 on:
-push:
-branches:
-- main
-- master
-- 'release/**'
-
-```
-paths-ignore:
-  - '**.md'
-  - 'LICENSE'
-```
-
-pull_request:
-branches:
-- main
-- master
-
-```
-paths-ignore:
-  - '**.md'
-  - 'LICENSE'
-```
-
-workflow_dispatch:
-inputs:
-obs_version:
-description: OBS Studio version
-required: true
-default: '32.1.2'
-type: string
+  push:
+    branches:
+      - main
+      - master
+      - 'release/**'
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+  pull_request:
+    branches:
+      - main
+      - master
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+  workflow_dispatch:
+    inputs:
+      obs_version:
+        description: OBS Studio version to build against
+        required: true
+        default: '32.1.2'
+        type: string
 
 concurrency:
-group: ${{ github.workflow }}-${{ github.ref }}
-cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
-OBS_VERSION: ${{ inputs.obs_version || '32.1.2' }}
-PLUGIN_NAME: obs-broadcast-plugin
-CMAKE_BUILD_TYPE: RelWithDebInfo
+  OBS_VERSION: ${{ inputs.obs_version || '32.1.2' }}
+  PLUGIN_NAME: obs-broadcast-plugin
+  CMAKE_BUILD_TYPE: RelWithDebInfo
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  # ══════════════════════════════════════════════════════════════════════════
+  # BUILD MATRIX
+  # ══════════════════════════════════════════════════════════════════════════
 
-build:
-name: ${{ matrix.name }}
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Linux ─────────────────────────────────────────────────────────
+          - os: ubuntu-24.04
+            name: "🐧 Ubuntu 24.04"
+            shell: bash
+            generator: Ninja
+            cmake-prefix: /usr/lib/x86_64-linux-gnu/cmake
+            artifact-suffix: linux-x86_64
 
-```
-strategy:
-  fail-fast: false
+          # ── Windows ───────────────────────────────────────────────────────
+          - os: windows-2022
+            name: "🪟 Windows 2022"
+            shell: pwsh
+            generator: Visual Studio 17 2022
+            cmake-arch: -A x64 -T host=x64
+            cmake-prefix: ${{ github.workspace }}\obs-studio\build_x64\lib\cmake
+            artifact-suffix: windows-x64
 
-  matrix:
-    include:
+          # ── macOS ─────────────────────────────────────────────────────────
+          - os: macos-15
+            name: "🍏 macOS 15"
+            shell: bash
+            generator: Ninja
+            cmake-prefix: /Applications/OBS.app/Contents/Frameworks/cmake
+            artifact-suffix: macos-universal
 
-      # ============================================================
-      # LINUX
-      # ============================================================
+    runs-on: ${{ matrix.os }}
 
-      - os: ubuntu-24.04
-        name: "🐧 Ubuntu 24.04"
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+
+    steps:
+      # ══════════════════════════════════════════════════════════════════════
+      # CHECKOUT
+      # ══════════════════════════════════════════════════════════════════════
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ══════════════════════════════════════════════════════════════════════
+      # CCACHE
+      # ══════════════════════════════════════════════════════════════════════
+
+      - name: Setup ccache
+        if: runner.os != 'Windows'
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ matrix.os }}-${{ env.OBS_VERSION }}
+          max-size: 500M
+
+      # ══════════════════════════════════════════════════════════════════════
+      # INSTALL OBS SDK
+      # ══════════════════════════════════════════════════════════════════════
+
+      - name: Install Dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo add-apt-repository ppa:obsproject/obs-studio -y
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            libobs-dev \
+            cmake \
+            ninja-build \
+            pkg-config \
+            build-essential
+
+      - name: Build OBS from source (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          $tag = "$env:OBS_VERSION"
+          $obsDir = "${{ github.workspace }}\obs-studio"
+          $obsBuild = "$obsDir\build_x64"
+
+          # ── 1. Clone OBS Studio (shallow, tag) ──────────────────────────
+          Write-Host "::group::[1/3] Cloning OBS Studio $tag"
+          git clone --depth 1 --branch $tag `
+            https://github.com/obsproject/obs-studio.git "$obsDir" 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
+          Write-Host "OBS source cloned to $obsDir"
+          Write-Host "::endgroup::"
+
+          # ── 2. Configure OBS with CMake preset ──────────────────────────
+          Write-Host "::group::[2/3] Configuring OBS (cmake --preset windows-x64)"
+          Push-Location "$obsDir"
+          cmake --preset windows-x64 2>&1
+          $exitCode = $LASTEXITCODE
+          Pop-Location
+          if ($exitCode -ne 0) { throw "OBS cmake configure failed (exit: $exitCode)" }
+          Write-Host "OBS configured. Build dir: $obsBuild"
+          Write-Host "::endgroup::"
+
+          # ── 3. Build OBS (libobs and generate SDK) ──────────────────────
+          Write-Host "::group::[3/3] Building OBS (this may take 20-40 min)"
+          Push-Location "$obsDir"
+          cmake --build --preset windows-x64 2>&1
+          $exitCode = $LASTEXITCODE
+          Pop-Location
+          if ($exitCode -ne 0) { throw "OBS build failed (exit: $exitCode)" }
+          Write-Host "OBS built successfully!"
+          Write-Host "::endgroup::"
+
+      - name: Install Dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install ninja
+          if [[ ! -d "/Applications/OBS.app" ]]; then
+            brew install --cask obs-studio
+          fi
+          # Verify OBS cmake path exists
+          if [[ ! -d "${{ matrix.cmake-prefix }}" ]]; then
+            echo "OBS cmake path not found: ${{ matrix.cmake-prefix }}"
+            echo "Contents of /Applications/OBS.app/Contents/Frameworks:"
+            ls -la /Applications/OBS.app/Contents/Frameworks/ 2>/dev/null || true
+            exit 1
+          fi
+
+      # ══════════════════════════════════════════════════════════════════════
+      # CMAKE CONFIGURE & BUILD PLUGIN
+      # ══════════════════════════════════════════════════════════════════════
+
+      - name: Configure CMake
+        run: |
+          cmake -S obs-broadcast-plugin -B build `
+            -G "${{ matrix.generator }}" `
+            ${{ matrix.cmake-arch || '' }} `
+            -DCMAKE_BUILD_TYPE="${{ env.CMAKE_BUILD_TYPE }}" `
+            ${{ runner.os != 'Windows' && '-DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache' || '' }} `
+            -DCMAKE_PREFIX_PATH="${{ matrix.cmake-prefix }}" `
+            -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/install"
+
+      - name: Build Plugin
+        run: |
+          cmake --build build --config "${{ env.CMAKE_BUILD_TYPE }}" --parallel $(nproc 2>/dev/null || echo 2)
+
+      - name: Install Plugin
+        run: |
+          cmake --install build --config "${{ env.CMAKE_BUILD_TYPE }}" --prefix "${{ github.workspace }}/install"
+
+      # ══════════════════════════════════════════════════════════════════════
+      # PACKAGE & UPLOAD
+      # ══════════════════════════════════════════════════════════════════════
+
+      - name: Prepare Artifacts
         shell: bash
-        generator: Ninja
-        artifact: linux-x86_64
-
-      # ============================================================
-      # WINDOWS
-      # ============================================================
-
-      - os: windows-2022
-        name: "🪟 Windows 2022"
-        shell: pwsh
-        generator: "Visual Studio 17 2022"
-        cmake_arch: "-A x64"
-        artifact: windows-x64
-
-      # ============================================================
-      # macOS
-      # ============================================================
-
-      - os: macos-15
-        name: "🍏 macOS 15"
-        shell: bash
-        generator: Ninja
-        artifact: macos-universal
-
-runs-on: ${{ matrix.os }}
-
-defaults:
-  run:
-    shell: ${{ matrix.shell }}
-
-steps:
-
-  # ================================================================
-  # CHECKOUT
-  # ================================================================
-
-  - name: Checkout
-    uses: actions/checkout@v4
-
-  # ================================================================
-  # CCACHE
-  # ================================================================
-
-  - name: Setup ccache
-    if: runner.os != 'Windows'
-    uses: hendrikmuhs/ccache-action@v1.2
-    with:
-      max-size: 500M
-
-  # ================================================================
-  # LINUX DEPENDENCIES
-  # ================================================================
-
-  - name: Install Dependencies (Linux)
-    if: runner.os == 'Linux'
-    run: |
-      sudo add-apt-repository ppa:obsproject/obs-studio -y
-
-      sudo apt-get update
-
-      sudo apt-get install -y \
-        libobs-dev \
-        cmake \
-        ninja-build \
-        pkg-config \
-        build-essential
-
-  # ================================================================
-  # WINDOWS DEPENDENCIES
-  # ================================================================
-
-  - name: Download OBS SDK (Windows)
-    if: runner.os == 'Windows'
-    run: |
-
-      $tag = "$env:OBS_VERSION"
-
-      $sdkUrl = "https://github.com/obsproject/obs-studio/releases/download/${tag}/OBS-Studio-${tag}-Windows-x64.zip"
-
-      $zipPath = "$env:TEMP\obs-sdk.zip"
-
-      $extractPath = "${{ github.workspace }}\obs-sdk"
-
-      Write-Host "::group::Downloading OBS SDK"
-      Write-Host "URL: $sdkUrl"
-
-      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
-      Invoke-WebRequest `
-        -Uri $sdkUrl `
-        -OutFile $zipPath `
-        -UseBasicParsing
-
-      Write-Host "::endgroup::"
-
-      Write-Host "::group::Extracting OBS SDK"
-
-      Expand-Archive `
-        -Path $zipPath `
-        -DestinationPath $extractPath `
-        -Force
-
-      Remove-Item $zipPath -Force
-
-      Write-Host "Extracted to: $extractPath"
-
-      Get-ChildItem $extractPath | Select-Object Name
-
-      Write-Host "::endgroup::"
-
-  # ================================================================
-  # WINDOWS CMAKE DETECTION
-  # ================================================================
-
-  - name: Detect OBS CMake Path
-    if: runner.os == 'Windows'
-    run: |
-
-      $paths = @(
-        "${{ github.workspace }}\obs-sdk\cmake",
-        "${{ github.workspace }}\obs-sdk\lib\cmake",
-        "${{ github.workspace }}\obs-sdk\obs-studio\cmake"
-      )
-
-      foreach ($p in $paths) {
-
-        if (Test-Path $p) {
-
-          Write-Host "Found CMake path: $p"
-
-          echo "OBS_CMAKE_PATH=$p" >> $env:GITHUB_ENV
-
-          exit 0
-        }
-      }
-
-      Write-Error "OBS CMake path not found"
-
-  # ================================================================
-  # macOS DEPENDENCIES
-  # ================================================================
-
-  - name: Install Dependencies (macOS)
-    if: runner.os == 'macOS'
-    run: |
-
-      brew install ninja
-
-      if [[ ! -d "/Applications/OBS.app" ]]; then
-        brew install --cask obs-studio
-      fi
-
-      EXPECTED="/Applications/OBS.app/Contents/Frameworks/cmake"
-
-      if [[ ! -d "$EXPECTED" ]]; then
-        echo "OBS cmake path not found"
-        exit 1
-      fi
-
-  # ================================================================
-  # CONFIGURE
-  # ================================================================
-
-  - name: Configure CMake (Linux/macOS)
-    if: runner.os != 'Windows'
-    run: |
-
-      if [[ "${{ runner.os }}" == "Linux" ]]; then
-        PREFIX="/usr/lib/x86_64-linux-gnu/cmake"
-      else
-        PREFIX="/Applications/OBS.app/Contents/Frameworks/cmake"
-      fi
-
-      cmake \
-        -S . \
-        -B build \
-        -G "${{ matrix.generator }}" \
-        -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} \
-        -DCMAKE_PREFIX_PATH="$PREFIX" \
-        -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/install" \
-        -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-        -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-
-  - name: Configure CMake (Windows)
-    if: runner.os == 'Windows'
-    run: |
-
-      cmake `
-        -S . `
-        -B build `
-        -G "${{ matrix.generator }}" `
-        ${{ matrix.cmake_arch }} `
-        -DCMAKE_PREFIX_PATH="$env:OBS_CMAKE_PATH" `
-        -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}\install"
-
-  # ================================================================
-  # BUILD
-  # ================================================================
-
-  - name: Build (Linux/macOS)
-    if: runner.os != 'Windows'
-    run: |
-
-      cmake --build build \
-        --config ${{ env.CMAKE_BUILD_TYPE }} \
-        --parallel
-
-  - name: Build (Windows)
-    if: runner.os == 'Windows'
-    run: |
-
-      cmake --build build `
-        --config $env:CMAKE_BUILD_TYPE `
-        --parallel
-
-  # ================================================================
-  # INSTALL
-  # ================================================================
-
-  - name: Install
-    run: |
-
-      cmake --install build --config ${{ env.CMAKE_BUILD_TYPE }}
-
-  # ================================================================
-  # PREPARE ARTIFACTS
-  # ================================================================
-
-  - name: Prepare Artifacts
-    shell: bash
-    run: |
-
-      mkdir -p artifacts
-
-      cp -r install/* artifacts/ || true
-
-      echo "::group::Artifacts"
-
-      find artifacts -type f | sort || true
-
-      echo "::endgroup::"
-
-  # ================================================================
-  # UPLOAD
-  # ================================================================
-
-  - name: Upload Artifacts
-    uses: actions/upload-artifact@v4
-    with:
-      name: ${{ env.PLUGIN_NAME }}-${{ matrix.artifact }}-${{ env.OBS_VERSION }}
-      path: artifacts/
-```
-
-# ====================================================================
-
-# RELEASE
-
-# ====================================================================
-
-release:
-
-```
-name: "📦 Release"
-
-if: startsWith(github.ref, 'refs/tags/v')
-
-needs: build
-
-runs-on: ubuntu-24.04
-
-permissions:
-  contents: write
-
-steps:
-
-  - name: Download Artifacts
-    uses: actions/download-artifact@v4
-    with:
-      path: release-assets
-
-  - name: Package
-    run: |
-
-      mkdir -p release
-
-      for dir in release-assets/*; do
-
-        name=$(basename "$dir")
-
-        if [[ "$name" == *windows* ]]; then
-
-          (
-            cd "$dir"
-            7z a "../../release/${name}.zip" .
-          )
-
-        else
-
-          (
-            cd "$dir"
-            tar czf "../../release/${name}.tar.gz" .
-          )
-
-        fi
-      done
-
-  - name: Checksums
-    run: |
-
-      cd release
-
-      sha256sum * > SHA256SUMS.txt
-
-      cat SHA256SUMS.txt
-
-  - name: Create Release
-    uses: softprops/action-gh-release@v2
-    with:
-      draft: true
-      prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
-      tag_name: ${{ github.ref_name }}
-      files: |
-        release/*
-```
+        run: |
+          mkdir -p artifacts
+          cp -r install/* artifacts/ || true
+          echo "::group::Artifacts"
+          find artifacts -type f | sort || true
+          echo "::endgroup::"
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PLUGIN_NAME }}-${{ matrix.artifact-suffix }}-${{ env.OBS_VERSION }}
+          path: artifacts/
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # RELEASE
+  # ══════════════════════════════════════════════════════════════════════════
+
+  release:
+    name: "📦 Release"
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Package
+        run: |
+          mkdir -p release
+          for dir in release-assets/*; do
+            name=$(basename "$dir")
+            if [[ "$name" == *windows* ]]; then
+              (cd "$dir" && 7z a "../../release/${name}.zip" .)
+            else
+              (cd "$dir" && tar czf "../../release/${name}.tar.gz" .)
+            fi
+          done
+
+      - name: Checksums
+        run: |
+          cd release
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}
+          tag_name: ${{ github.ref_name }}
+          files: |
+            release/*
