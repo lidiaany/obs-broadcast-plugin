@@ -6,7 +6,7 @@
 #
 # OBS SDK Strategy:
 #   - Ubuntu:  libobs-dev from the official OBS PPA (apt)
-#   - Windows: Pre-built OBS SDK zip from GitHub releases
+#   - Windows: OBS portable ZIP (runtime) + headers from source git sparse checkout
 #   - macOS:   OBS .app bundle via Homebrew cask (CMake config inside bundle)
 #
 # =============================================================================
@@ -37,12 +37,10 @@ on:
         default: '32.1.2'
         type: string
 
-# ── Concurrency: cancel in-flight runs for the same PR ────────────────────
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.label || github.head_ref || github.ref }}
   cancel-in-progress: true
 
-# ── Environment Variables ────────────────────────────────────────────────
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   OBS_VERSION: ${{ inputs.obs_version || '32.1.2' }}
@@ -51,45 +49,33 @@ env:
 
 jobs:
 
-  # ═══════════════════════════════════════════════════════════════════════
-  # BUILD MATRIX
-  # ═══════════════════════════════════════════════════════════════════════
   build:
     name: ${{ matrix.display-name }}
     strategy:
-      fail-fast: false  # Keep building other OSes even if one fails
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-24.04
-            display-name: '🐧 Ubuntu 24.04'
+            display-name: 'Ubuntu 24.04'
             shell: bash
             generator: Ninja
             cmake-prefix: /usr/lib/x86_64-linux-gnu/cmake
             artifact-suffix: linux-x86_64
-            binary-glob: |
-              build/libobs-broadcast-plugin.so*
-              build/**/libobs-broadcast-plugin.so*
 
           - os: windows-2022
-            display-name: '🪟 Windows 2022'
+            display-name: 'Windows 2022'
             shell: pwsh
             generator: Visual Studio 17 2022
             cmake-arch: '-A x64 -T host=x64'
-            cmake-prefix: ${{ github.workspace }}/obs-sdk/cmake
+            cmake-prefix: ${{ github.workspace }}/obs-sdk/lib/cmake
             artifact-suffix: windows-x64
-            binary-glob: |
-              build/**/obs-broadcast-plugin.dll
-              build/**/obs-broadcast-plugin.pdb
 
           - os: macos-15
-            display-name: '🍏 macOS 15'
+            display-name: 'macOS 15'
             shell: bash
             generator: Ninja
             cmake-prefix: /Applications/OBS.app/Contents/Frameworks/cmake
             artifact-suffix: macOS-universal
-            binary-glob: |
-              build/libobs-broadcast-plugin.so
-              build/**/libobs-broadcast-plugin.so
 
     runs-on: ${{ matrix.os }}
     defaults:
@@ -97,13 +83,10 @@ jobs:
         shell: ${{ matrix.shell }}
 
     steps:
-      # ── Checkout ──────────────────────────────────────────────────────
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      # ── ccache (faster rebuilds) ──────────────────────────────────────
       - name: Setup ccache
         if: runner.os != 'Windows'
         uses: hendrikmuhs/ccache-action@v1.2
@@ -112,7 +95,7 @@ jobs:
           max-size: 500M
 
       # ══════════════════════════════════════════════════════════════════
-      # INSTALL OBS SDK — Platform Specific
+      # INSTALL OBS SDK
       # ══════════════════════════════════════════════════════════════════
 
       - name: Install Dependencies (Ubuntu)
@@ -131,67 +114,82 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           $tag = "$env:OBS_VERSION"
-          $sdkUrl = "https://github.com/obsproject/obs-studio/releases/download/${tag}/OBS-Studio-${tag}-Windows-x64.zip"
-          $zipPath = "$env:TEMP\obs-sdk.zip"
           $extractPath = "${{ github.workspace }}\obs-sdk"
+          $zipPath = "$env:TEMP\obs-sdk.zip"
 
-          Write-Host "::group::Downloading OBS SDK $env:OBS_VERSION"
+          # ── 1. Download OBS portable ZIP (contains libobs.dll + .lib) ──
+          Write-Host "::group::Step 1 - Download OBS runtime ZIP"
+          $sdkUrl = "https://github.com/obsproject/obs-studio/releases/download/${tag}/OBS-Studio-${tag}-Windows-x64.zip"
           Write-Host "URL: $sdkUrl"
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
           Invoke-WebRequest -Uri $sdkUrl -OutFile $zipPath -UseBasicParsing
-          Write-Host "::endgroup::"
-
-          Write-Host "::group::Extracting OBS SDK"
           Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
           Remove-Item $zipPath -Force
-          Write-Host "Extracted to: $extractPath"          Get-ChildItem $extractPath | Select-Object Name
           Write-Host "::endgroup::"
 
-      - name: Detect OBS CMake Path (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $possiblePaths = @(
-            "${{ github.workspace }}\obs-sdk\cmake",
-            "${{ github.workspace }}\obs-sdk\lib\cmake",
-            "${{ github.workspace }}\obs-sdk\obs-studio\cmake"
-          )
+          # ── 2. Clone OBS headers (sparse checkout, only libobs/) ───────
+          Write-Host "::group::Step 2 - Download OBS headers from source"
+          git clone --depth 1 --filter=blob:none --sparse `
+            https://github.com/obsproject/obs-studio.git `
+            "$extractPath\obs-src" 2>&1 | Select-String "Receiving|Receiving objects"
+          Push-Location "$extractPath\obs-src"
+          git sparse-checkout set libobs 2>&1 | Out-Null
+          Pop-Location
 
-          foreach ($p in $possiblePaths) {
-            if (Test-Path ("$p\libobs\libobsConfig.cmake")) {
-              echo "OBS_CMAKE_PATH=$p" >> $env:GITHUB_ENV
-              Write-Host "Found OBS CMake path: $p"
-              exit 0
-            }
+          $srcHeaders = "$extractPath\obs-src\libobs"
+          $dstHeaders = "$extractPath\include\obs"
+          Get-ChildItem $srcHeaders -Recurse -Filter "*.h" | ForEach-Object {
+            $rel = $_.FullName.Substring($srcHeaders.Length + 1)
+            $dir = Split-Path "$dstHeaders\$rel" -Parent
+            mkdir -Force $dir -ErrorAction SilentlyContinue | Out-Null
+            Copy-Item $_.FullName "$dstHeaders\$rel" -Force
           }
+          $hCount = (Get-ChildItem $dstHeaders -Recurse -Filter "*.h" | Measure-Object).Count
+          Write-Host "Copied $hCount header files"
+          Remove-Item -Recurse -Force "$extractPath\obs-src"
+          Write-Host "::endgroup::"
 
-          Write-Error "Could not find OBS CMake path. Tried: $($possiblePaths -join ', ')"
-          exit 1
+          # ── 3. Create libobs CMake config ──────────────────────────────
+          Write-Host "::group::Step 3 - Create CMake config"
+          $cmakeDir = "$extractPath\lib\cmake\libobs"
+          mkdir -Force $cmakeDir -ErrorAction SilentlyContinue | Out-Null
+
+          @"
+set(libobs_FOUND TRUE)
+set(libobs_VERSION "$tag")
+if(NOT TARGET libobs)
+  add_library(libobs SHARED IMPORTED)
+  set_target_properties(libobs PROPERTIES
+    IMPORTED_IMPLIB "${extractPath}/lib/obs.lib"
+    INTERFACE_INCLUDE_DIRECTORIES "${extractPath}/include"
+  )
+endif()
+"@ | Set-Content "$cmakeDir\libobsConfig.cmake" -Encoding ASCII
+          Write-Host "Created: $cmakeDir\libobsConfig.cmake"
+          Write-Host "::endgroup::"
+
+          # ── 4. Show structure ──────────────────────────────────────────
+          Write-Host "::group::OBS SDK structure"
+          Get-ChildItem $extractPath | Select-Object Mode, Length, Name
+          Write-Host "::endgroup::"
 
       - name: Install Dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
           brew install ninja
-
-          # Check if OBS is already installed (from cache)
           if [[ ! -d "/Applications/OBS.app" ]]; then
             brew install --cask obs-studio
-          else
-            echo "OBS.app found in /Applications"
           fi
-
-          # Verify CMake config exists inside the .app bundle
           EXPECTED_DIR="/Applications/OBS.app/Contents/Frameworks/cmake"
           if [[ -d "$EXPECTED_DIR" ]]; then
             echo "OBS CMake config found at $EXPECTED_DIR"
           else
             echo "::warning::OBS CMake config not found at $EXPECTED_DIR"
-            echo "::warning::Trying alternative locations..."
             find "/Applications/OBS.app" -name "libobsConfig.cmake" -type f 2>/dev/null || true
           fi
 
       # ══════════════════════════════════════════════════════════════════
-      # CMAKE CONFIGURE
+      # CMAKE CONFIGURE & BUILD
       # ══════════════════════════════════════════════════════════════════
 
       - name: Configure CMake
@@ -204,61 +202,35 @@ jobs:
             -DCMAKE_PREFIX_PATH="${{ matrix.cmake-prefix }}" `
             -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/install"
 
-      # ══════════════════════════════════════════════════════════════════
-      # BUILD
-      # ══════════════════════════════════════════════════════════════════
-
       - name: Build Plugin
         run: |
           cmake --build build --config "${{ env.CMAKE_BUILD_TYPE }}" --parallel $(nproc 2>/dev/null || echo 2)
-
-      # ══════════════════════════════════════════════════════════════════
-      # INSTALL
-      # ══════════════════════════════════════════════════════════════════
 
       - name: Install Plugin
         run: |
           cmake --install build --config "${{ env.CMAKE_BUILD_TYPE }}" --prefix "${{ github.workspace }}/install"
 
       # ══════════════════════════════════════════════════════════════════
-      # PACKAGE ARTIFACTS
+      # PACKAGE & UPLOAD
       # ══════════════════════════════════════════════════════════════════
 
       - name: Prepare Artifacts
         shell: bash
         run: |
           mkdir -p artifacts/plugin artifacts/data
-
-          # ── Find compiled plugin binary ─────────────────────────────
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            # Windows: search for .dll and .pdb
-            BINARY=$(find build -name "obs-broadcast-plugin.dll" -type f | head -1)
+            DLL=$(find build -name "obs-broadcast-plugin.dll" -type f | head -1)
             PDB=$(find build -name "obs-broadcast-plugin.pdb" -type f | head -1)
-            if [[ -n "$BINARY" ]]; then
-              cp "$BINARY" artifacts/plugin/
-              echo "Copied DLL: $BINARY"
-            fi
-            if [[ -n "$PDB" ]]; then
-              cp "$PDB" artifacts/plugin/
-              echo "Copied PDB: $PDB"
-            fi
+            [[ -n "$DLL" ]] && cp "$DLL" artifacts/plugin/
+            [[ -n "$PDB" ]] && cp "$PDB" artifacts/plugin/
           else
-            # Unix: search for .so
-            BINARY=$(find build -name "libobs-broadcast-plugin.so*" -type f | head -1)
-            if [[ -n "$BINARY" ]]; then
-              cp "$BINARY" artifacts/plugin/
-              echo "Copied SO: $BINARY"
-            fi
+            SO=$(find build -name "libobs-broadcast-plugin.so*" -type f | head -1)
+            [[ -n "$SO" ]] && cp "$SO" artifacts/plugin/
           fi
-
-          # ── Copy data directory (shaders + locale) ─────────────────
           if [[ -d "obs-broadcast-plugin/data" ]]; then
             cp -r obs-broadcast-plugin/data/* artifacts/data/
-            echo "Copied data files"
           fi
-
-          # ── List what we have ──────────────────────────────────────
-          echo "::group::Artifact contents"
+          echo "::group::Artifacts"
           find artifacts -type f | sort
           echo "::endgroup::"
 
@@ -272,8 +244,9 @@ jobs:
   # ═══════════════════════════════════════════════════════════════════════
   # RELEASE (triggered by version tags)
   # ═══════════════════════════════════════════════════════════════════════
+
   release:
-    name: '📦 Create Release'
+    name: 'Create Release'
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-24.04
@@ -289,8 +262,6 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release
-
-          # Package each platform's artifacts into a tar.gz/zip
           for dir in artifacts/*/; do
             name=$(basename "$dir")
             if [[ "$name" == *"windows"* ]]; then
@@ -299,10 +270,7 @@ jobs:
               (cd "$dir" && tar czf "../../release/${name}.tar.gz" .)
             fi
           done
-
-          echo "::group::Release Assets"
           ls -la release/
-          echo "::endgroup::"
 
       - name: Generate Checksums
         run: |
