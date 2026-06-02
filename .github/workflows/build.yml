@@ -152,11 +152,11 @@ jobs:
           # ── 3. Build OBS (libobs and generate SDK) ──────────────────────
           Write-Host "::group::[3/3] Building OBS (this may take 20-40 min)"
           Push-Location "$obsDir"
-          cmake --build --preset windows-x64 2>&1
+          cmake --build --preset windows-x64 --target libobs 2>&1
           $exitCode = $LASTEXITCODE
           Pop-Location
           if ($exitCode -ne 0) { throw "OBS build failed (exit: $exitCode)" }
-          Write-Host "OBS built successfully!"
+          Write-Host "OBS libobs built successfully!"
           Write-Host "::endgroup::"
 
       - name: Install Dependencies (macOS)
