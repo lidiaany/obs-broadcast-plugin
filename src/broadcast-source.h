@@ -5,8 +5,12 @@
  * callback que o OBS utiliza para gerenciar a source personalizada.
  *
  * Texto renderizado via child sources oficiais do OBS:
- *   - text_gdiplus  (Windows / macOS)
- *   - text_ft2_source_v2 (Linux)
+ *   - text_gdiplus        (Windows, GDI+)
+ *   - text_ft2_source_v2  (cross-platform, FreeType2 — OBS 27+)
+ *   - text_ft2_source     (cross-platform, FreeType2 — legado)
+ *
+ * A criacao tenta cada tipo em ordem de prioridade ate
+ * encontrar um disponivel (fallback automatico).
  *
  * ============================================================================
  */

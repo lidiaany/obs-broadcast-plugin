@@ -4,8 +4,10 @@
  * Implementa os callbacks de ciclo de vida da source, incluindo
  * gerenciamento do servidor WebSocket para controle remoto.
  *
- * Texto renderizado via child sources oficiais do OBS (text_gdiplus /
- * text_ft2_source_v2) — não existe gs_font_t no OBS Studio.
+ * Texto renderizado via child sources oficiais do OBS.
+ * fallback automatico: tenta text_gdiplus, text_ft2_source_v2 e
+ * text_ft2_source em ordem de prioridade ate encontrar um disponivel.
+ * Nao existe gs_font_t no OBS Studio.
  *
  * ============================================================================
  */
@@ -14,6 +16,7 @@
 #include <obs-module.h>
 #include <cstring>
 #include <cstdio>
+#include <mutex>
 
 /* ============================================================================
  * TEXT SOURCE HELPERS
@@ -44,26 +47,73 @@ static uint32_t argb_to_abgr(uint32_t argb)
 }
 
 /*
- * Retorna o tipo de source de texto disponível na plataforma actual.
+ * Lista priorizada de IDs de text source para cada plataforma.
+ * Tenta criar com cada ID até um funcionar. Cachea o resultado.
  *
- * Windows: text_gdiplus (GDI+)
- * macOS / Linux: text_ft2_source (FreeType2 via text-freetype2 plugin)
+ * Prioridade:
+ *   Windows:   text_gdiplus -> text_ft2_source_v2 -> text_ft2_source
+ *   macOS/Linux: text_ft2_source_v2 -> text_ft2_source
  *
- * NOTA: OBS 30+ unificou o texto não-Windows no plugin text-freetype2.
- * Antigas versões usavam text_ft2_source_v2 no Linux; apenas text_ft2_source
- * existe em todas as versões recentes.
+ * text_ft2_source_v2 é o ID moderno do FreeType2 (OBS 27+).
+ * text_ft2_source é o ID legado (upgrades de cenas antigas).
+ * text_gdiplus é Windows-only (GDI+).
  */
-static const char *get_text_src_type(void)
+/* Cache do tipo de source de texto (thread-safe via std::call_once) */
+static const char *g_text_src_type = NULL;
+static std::once_flag g_text_src_probe_flag;
+
+static void probe_text_src_type_impl(void)
 {
 #ifdef _WIN32
-    return "text_gdiplus";
+    static const char *candidates[] = {
+        "text_gdiplus",
+        "text_ft2_source_v2",
+        "text_ft2_source",
+        NULL
+    };
 #else
-    /* macOS e Linux usam FreeType2 */
-    return "text_ft2_source";
+    /* macOS e Linux: FreeType2 */
+    static const char *candidates[] = {
+        "text_ft2_source_v2",
+        "text_ft2_source",
+        NULL
+    };
 #endif
+
+    obs_data_t *s = obs_data_create();
+    obs_data_set_string(s, "text", "probe");
+
+    for (int i = 0; candidates[i]; i++) {
+        const char *type = candidates[i];
+        obs_source_t *probe = obs_source_create_private(
+            type, "broadcast_text_probe", s);
+        if (probe) {
+            blog(LOG_INFO,
+                 "[Broadcast Overlay] Text source type selecionado: %s",
+                 type);
+            obs_source_release(probe);
+            obs_data_release(s);
+            g_text_src_type = candidates[i];
+            return;
+        }
+    }
+
+    obs_data_release(s);
+
+    blog(LOG_WARNING,
+         "[Broadcast Overlay] Nenhum plugin de texto encontrado! "
+         "Tente instalar text-freetype2 (Linux/macOS) ou "
+         "verifique a instalação do OBS.");
+    g_text_src_type = candidates[0];
 }
 
-/* Cria uma child source de texto privada. */
+static const char *get_text_src_type(void)
+{
+    std::call_once(g_text_src_probe_flag, probe_text_src_type_impl);
+    return g_text_src_type;
+}
+
+/* Cria uma child source de texto privada com fallback automatico. */
 obs_source_t *broadcast_create_text_src(const char *text,
                                          uint32_t    argb_color,
                                          int         font_size,
@@ -88,13 +138,6 @@ obs_source_t *broadcast_create_text_src(const char *text,
     const char *type = get_text_src_type();
     obs_source_t *src = obs_source_create_private(
         type, "broadcast_overlay_txt", s);
-
-    if (!src) {
-        blog(LOG_WARNING,
-             "[Broadcast Overlay] Falha ao criar child source de texto "
-             "(tipo: %s) — o plugin de texto pode nao estar instalado.",
-             type);
-    }
 
     obs_data_release(s);
     return src;
