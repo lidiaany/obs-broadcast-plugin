@@ -1,15 +1,12 @@
 /* ============================================================================
- * graphics-render.cpp — Broadcast Overlay System (Renderização)
+ * graphics-render.cpp — Broadcast Overlay System (Renderizacao)
  *
- * Implementa toda a renderização gráfica dos componentes do overlay.
+ * Implementa toda a renderizacao grafica dos componentes do overlay.
  *
- * TEXTO: renderizado via child sources do OBS (text_gdiplus / text_ft2_source_v2).
- * O OBS não tem uma API de fontes directa (gs_font_t não existe no libobs).
- * As child sources são geridas em BroadcastContext e actualizadas em
- * broadcast_update(). Aqui apenas as renderizamos com transforms de posição.
- *
- * GEOMETRIA: retângulos sólidos, gradientes e cantos arredondados usam a
- * API legítima gs_render_start / gs_vertex2f / gs_color4u.
+ * TEXTO: renderizado via child sources do OBS.
+ * GEOMETRIA: retangulos solidos, gradientes e cantos arredondados usam a
+ * API grafics.h do libobs (OBS 31+):
+ *   gs_render_start(bool), gs_vertex2f(), gs_color(uint32_t), gs_render_stop()
  *
  * SHADER: frosted glass via gs_effect_t carregado de ficheiro .effect.
  *
@@ -25,7 +22,7 @@
 #include <cstdio>
 
 /* ============================================================================
- * FUNÇÕES DE EASING
+ * FUNCOES DE EASING
  * ============================================================================ */
 
 float ease_out_cubic(float t)
@@ -41,20 +38,10 @@ float ease_in_out_cubic(float t)
 }
 
 /* ============================================================================
- * RENDERIZAÇÃO DE TEXTO VIA CHILD SOURCES
+ * RENDERIZACAO DE TEXTO VIA CHILD SOURCES
  * ============================================================================
- *
- * O OBS não expõe gs_font_t nem funções gs_font_*. A forma oficial e correcta
- * de renderizar texto num plugin OBS é usar child sources do tipo:
- *   - text_gdiplus       (Windows / macOS)
- *   - text_ft2_source_v2 (Linux)
- *
- * As child sources são criadas e actualizadas em broadcast_update() (thread
- * principal). Aqui chamamos obs_source_video_render() com transforms de
- * posição para as desenhar no local correcto do overlay.
  */
 
-/* Renderiza uma child source de texto na posição (x, y). */
 static void draw_text_source(obs_source_t *src, float x, float y)
 {
     if (!src) return;
@@ -64,11 +51,6 @@ static void draw_text_source(obs_source_t *src, float x, float y)
     gs_matrix_pop();
 }
 
-/*
- * Retorna a largura da child source.
- * Após a primeira renderização, obs_source_get_width() devolve o valor real.
- * Antes disso (primeiro frame), usa estimativa tipográfica como fallback.
- */
 static float get_src_width(obs_source_t *src, const char *text, int font_size)
 {
     if (src) {
@@ -76,14 +58,9 @@ static float get_src_width(obs_source_t *src, const char *text, int font_size)
         if (w > 0) return (float)w;
     }
     if (!text || !*text) return 0.0f;
-    /* Estimativa: ~0.55 × font_size × nº de caracteres */
     return (float)(int)strlen(text) * (float)font_size * 0.55f;
 }
 
-/*
- * Retorna a altura da child source.
- * Fallback: font_size × 1.2 (padrão tipográfico).
- */
 static float get_src_height(obs_source_t *src, int font_size)
 {
     if (src) {
@@ -106,28 +83,21 @@ static uint32_t apply_opacity(uint32_t color, float mult)
 /* ============================================================================
  * draw_rect
  * ============================================================================
- * Retângulo sólido via GS_TRISTRIP.
+ * Retangulo solido via gs_render_start/stop (OBS 31 API).
  */
 void draw_rect(float x, float y, float w, float h, uint32_t color)
 {
-    uint32_t alpha = GET_ALPHA(color);
-    uint32_t red   = GET_RED(color);
-    uint32_t green = GET_GREEN(color);
-    uint32_t blue  = GET_BLUE(color);
-
-    gs_render_start(GS_TRISTRIP);
-    gs_vertex2f(x,     y);      gs_color4u(red, green, blue, alpha);
-    gs_vertex2f(x + w, y);      gs_color4u(red, green, blue, alpha);
-    gs_vertex2f(x,     y + h);  gs_color4u(red, green, blue, alpha);
-    gs_vertex2f(x + w, y + h);  gs_color4u(red, green, blue, alpha);
+    gs_render_start(true);
+    gs_vertex2f(x,     y);      gs_color(color);
+    gs_vertex2f(x + w, y);      gs_color(color);
+    gs_vertex2f(x,     y + h);  gs_color(color);
+    gs_vertex2f(x + w, y + h);  gs_color(color);
     gs_render_stop(GS_TRISTRIP);
 }
 
 /* ============================================================================
  * draw_rounded_rect
  * ============================================================================
- * Retângulo com cantos arredondados usando triângulos simples.
- * 9 draw calls no total: 1 centro + 2 faixas laterais + 4 cantos (3 segs cada).
  */
 void draw_rounded_rect(float x, float y, float w, float h,
                         float radius, uint32_t color)
@@ -137,33 +107,28 @@ void draw_rounded_rect(float x, float y, float w, float h,
         return;
     }
 
-    uint32_t alpha = GET_ALPHA(color);
-    uint32_t red   = GET_RED(color);
-    uint32_t green = GET_GREEN(color);
-    uint32_t blue  = GET_BLUE(color);
-
     /* Centro */
-    gs_render_start(GS_TRISTRIP);
-    gs_vertex2f(x + radius,     y);      gs_color4u(red, green, blue, alpha);
-    gs_vertex2f(x + w - radius, y);      gs_color4u(red, green, blue, alpha);
-    gs_vertex2f(x + radius,     y + h);  gs_color4u(red, green, blue, alpha);
-    gs_vertex2f(x + w - radius, y + h);  gs_color4u(red, green, blue, alpha);
+    gs_render_start(true);
+    gs_vertex2f(x + radius,     y);      gs_color(color);
+    gs_vertex2f(x + w - radius, y);      gs_color(color);
+    gs_vertex2f(x + radius,     y + h);  gs_color(color);
+    gs_vertex2f(x + w - radius, y + h);  gs_color(color);
     gs_render_stop(GS_TRISTRIP);
 
     /* Faixa esquerda */
-    gs_render_start(GS_TRISTRIP);
-    gs_vertex2f(x,          y + radius);      gs_color4u(red, green, blue, alpha);
-    gs_vertex2f(x + radius, y + radius);      gs_color4u(red, green, blue, alpha);
-    gs_vertex2f(x,          y + h - radius);  gs_color4u(red, green, blue, alpha);
-    gs_vertex2f(x + radius, y + h - radius);  gs_color4u(red, green, blue, alpha);
+    gs_render_start(true);
+    gs_vertex2f(x,          y + radius);      gs_color(color);
+    gs_vertex2f(x + radius, y + radius);      gs_color(color);
+    gs_vertex2f(x,          y + h - radius);  gs_color(color);
+    gs_vertex2f(x + radius, y + h - radius);  gs_color(color);
     gs_render_stop(GS_TRISTRIP);
 
     /* Faixa direita */
-    gs_render_start(GS_TRISTRIP);
-    gs_vertex2f(x + w - radius, y + radius);      gs_color4u(red, green, blue, alpha);
-    gs_vertex2f(x + w,          y + radius);      gs_color4u(red, green, blue, alpha);
-    gs_vertex2f(x + w - radius, y + h - radius);  gs_color4u(red, green, blue, alpha);
-    gs_vertex2f(x + w,          y + h - radius);  gs_color4u(red, green, blue, alpha);
+    gs_render_start(true);
+    gs_vertex2f(x + w - radius, y + radius);      gs_color(color);
+    gs_vertex2f(x + w,          y + radius);      gs_color(color);
+    gs_vertex2f(x + w - radius, y + h - radius);  gs_color(color);
+    gs_vertex2f(x + w,          y + h - radius);  gs_color(color);
     gs_render_stop(GS_TRISTRIP);
 
     /* Cantos arredondados (3 segmentos por canto) */
@@ -171,52 +136,45 @@ void draw_rounded_rect(float x, float y, float w, float h,
     const float step = (float)(M_PI / 2.0 / segs);
 
     auto corner = [&](float cx, float cy, float start_angle) {
-        gs_render_start(GS_TRISTRIP);
+        gs_render_start(true);
         for (int i = 0; i < segs; i++) {
             float a0 = start_angle + (float)i       * step;
             float a1 = start_angle + (float)(i + 1) * step;
             gs_vertex2f(cx + cosf(a0) * radius, cy + sinf(a0) * radius);
-            gs_color4u(red, green, blue, alpha);
+            gs_color(color);
             gs_vertex2f(cx + cosf(a1) * radius, cy + sinf(a1) * radius);
-            gs_color4u(red, green, blue, alpha);
+            gs_color(color);
             gs_vertex2f(cx, cy);
-            gs_color4u(red, green, blue, alpha);
+            gs_color(color);
         }
         gs_render_stop(GS_TRISTRIP);
     };
 
-    corner(x + radius,         y + radius,         (float)M_PI);           /* top-left     */
-    corner(x + w - radius,     y + radius,         (float)M_PI / 2.0f);    /* top-right    */
-    corner(x + radius,         y + h - radius,     (float)M_PI * 1.5f);    /* bottom-left  */
-    corner(x + w - radius,     y + h - radius,     0.0f);                  /* bottom-right */
+    corner(x + radius,         y + radius,         (float)M_PI);
+    corner(x + w - radius,     y + radius,         (float)M_PI / 2.0f);
+    corner(x + radius,         y + h - radius,     (float)M_PI * 1.5f);
+    corner(x + w - radius,     y + h - radius,     0.0f);
 }
 
 /* ============================================================================
  * draw_gradient_rect
  * ============================================================================
- * Retângulo com gradiente horizontal via interpolação de vértices.
  */
 void draw_gradient_rect(float x, float y, float w, float h,
                          uint32_t color_left, uint32_t color_right)
 {
-    uint32_t aL = GET_ALPHA(color_left),  rL = GET_RED(color_left),
-             gL = GET_GREEN(color_left),  bL = GET_BLUE(color_left);
-    uint32_t aR = GET_ALPHA(color_right), rR = GET_RED(color_right),
-             gR = GET_GREEN(color_right), bR = GET_BLUE(color_right);
-
-    gs_render_start(GS_TRISTRIP);
-    gs_vertex2f(x,     y);      gs_color4u(rL, gL, bL, aL);
-    gs_vertex2f(x + w, y);      gs_color4u(rR, gR, bR, aR);
-    gs_vertex2f(x,     y + h);  gs_color4u(rL, gL, bL, aL);
-    gs_vertex2f(x + w, y + h);  gs_color4u(rR, gR, bR, aR);
+    gs_render_start(true);
+    gs_vertex2f(x,     y);      gs_color(color_left);
+    gs_vertex2f(x + w, y);      gs_color(color_right);
+    gs_vertex2f(x,     y + h);  gs_color(color_left);
+    gs_vertex2f(x + w, y + h);  gs_color(color_right);
     gs_render_stop(GS_TRISTRIP);
 }
 
 /* ============================================================================
  * draw_rect_glass
  * ============================================================================
- * Retângulo com efeito frosted glass via shader .effect.
- * Fallback para retângulo sólido se o shader não estiver carregado.
+ * Efeito frosted glass via shader .effect. Fallback para solido se falhar.
  */
 void draw_rect_glass(BroadcastContext *ctx, float x, float y,
                       float w, float h, uint32_t color, bool vertical)
@@ -252,11 +210,11 @@ void draw_rect_glass(BroadcastContext *ctx, float x, float y,
     gs_technique_begin(tech);
     gs_technique_begin_pass(tech, 0);
 
-    gs_render_start(GS_TRISTRIP);
-    gs_texcoord2f(0.0f, 0.0f);  gs_vertex2f(x,     y);
-    gs_texcoord2f(1.0f, 0.0f);  gs_vertex2f(x + w, y);
-    gs_texcoord2f(0.0f, 1.0f);  gs_vertex2f(x,     y + h);
-    gs_texcoord2f(1.0f, 1.0f);  gs_vertex2f(x + w, y + h);
+    gs_render_start(true);
+    gs_texcoord(0.0f, 0.0f, 0);  gs_vertex2f(x,     y);
+    gs_texcoord(1.0f, 0.0f, 0);  gs_vertex2f(x + w, y);
+    gs_texcoord(0.0f, 1.0f, 0);  gs_vertex2f(x,     y + h);
+    gs_texcoord(1.0f, 1.0f, 0);  gs_vertex2f(x + w, y + h);
     gs_render_stop(GS_TRISTRIP);
 
     gs_technique_end_pass(tech);
@@ -266,8 +224,6 @@ void draw_rect_glass(BroadcastContext *ctx, float x, float y,
 /* ============================================================================
  * LOWER THIRD
  * ============================================================================
- * Barra semi-transparente na parte inferior com nome (bold 36pt) e
- * cargo (regular 24pt). Animacao: slide entrada/saida + fade para centro.
  */
 void render_lower_third(BroadcastContext *ctx)
 {
@@ -310,7 +266,6 @@ void render_lower_third(BroadcastContext *ctx)
 
     float lt_opacity = ctx->opacity_global * ctx->opacity_lt;
 
-    /* Aplica alpha da animacao + opacidade a cor de fundo */
     uint32_t bg_color = ctx->color_bg;
     float total_alpha_mult = alpha_mult * lt_opacity;
     if (total_alpha_mult < 1.0f) {
@@ -319,16 +274,11 @@ void render_lower_third(BroadcastContext *ctx)
                  | (GET_GREEN(bg_color) << 8) | GET_BLUE(bg_color);
     }
 
-    /* Fundo glass */
     draw_rect_glass(ctx, bgx, y_base, bgw, bar_h, bg_color, true);
-    /* Barra lateral colorida */
     uint32_t bar_color = apply_opacity(ctx->color_primary, lt_opacity);
     draw_rect(bgx, y_base, side_w, bar_h, bar_color);
 
-    /* Texto: nome (bold) */
     draw_text_source(ctx->ts_lt_name, bgx + tx_off, y_base + 20.0f);
-
-    /* Texto: cargo (regular) */
     if (ctx->lt_title && strlen(ctx->lt_title) > 0)
         draw_text_source(ctx->ts_lt_title, bgx + tx_off, y_base + 65.0f);
 }
@@ -336,13 +286,6 @@ void render_lower_third(BroadcastContext *ctx)
 /* ============================================================================
  * GC (GERADOR DE CARACTERES)
  * ============================================================================
- * Texto dinâmico centralizado. Tamanho de fonte ajustado ao comprimento
- * do texto em broadcast_update() e guardado em ctx->gc_font_size.
- *
- * Animacoes suportadas (via WebSocket "animate"):
- *   - fade:  opacidade de 0 a 1
- *   - scale: escala de 0.3 a 1.0
- *   - slide: desliza de fora da tela ate a posicao central
  */
 void render_gc(BroadcastContext *ctx)
 {
@@ -359,14 +302,12 @@ void render_gc(BroadcastContext *ctx)
     float cy = (H - th) * 0.5f;
     float bp = 30.0f;
 
-    /* Calcula progresso de animacao */
     float anim_progress = ease_out_cubic(ctx->gc_anim_progress);
     bool gc_anim_active = (ctx->gc_anim_state != 0 || ctx->gc_anim_progress > 0.0f);
     const char *gc_type = gc_anim_active ? (ctx->gc_anim_type ? ctx->gc_anim_type : "fade") : "";
 
     gs_matrix_push();
 
-    /* Aplica transformacoes de animacao (scale / slide) */
     if (gc_anim_active) {
         if (strcmp(gc_type, "scale") == 0) {
             float s = 0.3f + 0.7f * anim_progress;
@@ -383,10 +324,8 @@ void render_gc(BroadcastContext *ctx)
             else if (strcmp(dir, "right") == 0) sx = -slide_dist;
             gs_matrix_translate3f(sx, sy, 0.0f);
         }
-        /* fade nao requer transform — aplicado via alpha abaixo */
     }
 
-    /* Aplica opacidade global + do GC + fade animation */
     float gc_opacity = ctx->opacity_global * ctx->opacity_gc;
     if (gc_anim_active && strcmp(gc_type, "fade") == 0) {
         float fade_alpha = (anim_progress < 0.01f) ? 0.0f : anim_progress;
@@ -403,8 +342,6 @@ void render_gc(BroadcastContext *ctx)
 /* ============================================================================
  * TICKER (RODAPE)
  * ============================================================================
- * Texto corrido estilo news ticker com loop infinito.
- * O texto e renderizado ate 3 vezes por frame para cobrir o wrap.
  */
 void render_ticker(BroadcastContext *ctx)
 {
@@ -424,23 +361,19 @@ void render_ticker(BroadcastContext *ctx)
     uint32_t ticker_bg = apply_opacity(COLOR_TICKER_BG, tk_opacity);
     uint32_t line_color = apply_opacity(ctx->color_primary, tk_opacity);
 
-    /* Barra de fundo + linha de cor */
     draw_rect(0.0f, H - bh, W, bh, ticker_bg);
     draw_rect(0.0f, H - bh, W, 3.0f, line_color);
 
     float th = get_src_height(ctx->ts_ticker, fs);
     float yt = H - bh + (bh - th) * 0.5f;
 
-    /* Primeira instancia (posicao actual) */
     float x1 = W - off;
     draw_text_source(ctx->ts_ticker, x1, yt);
 
-    /* Segunda instancia (imediatamente a esquerda — wrap) */
     float x2 = x1 - uw;
     if (x2 + tw > 0.0f)
         draw_text_source(ctx->ts_ticker, x2, yt);
 
-    /* Terceira instancia (imediatamente a direita — fill) */
     float x3 = x1 + uw;
     if (x3 < W)
         draw_text_source(ctx->ts_ticker, x3, yt);
@@ -449,14 +382,11 @@ void render_ticker(BroadcastContext *ctx)
 /* ============================================================================
  * REDES SOCIAIS
  * ============================================================================
- * Painel lateral com as redes activas. Tags em bold 14pt + handles 20pt.
- * Posicao configuravel (4 cantos). Opacidade controlada via WebSocket.
  */
 void render_social_media(BroadcastContext *ctx)
 {
     if (!ctx) return;
 
-    /* Indexa apenas as redes com handle preenchido */
     struct SocialItem { int idx; const char *handle; };
     SocialItem items[4];
     int count = 0;
@@ -473,18 +403,16 @@ void render_social_media(BroadcastContext *ctx)
     }
     if (count == 0) return;
 
-    /* Tags partilhadas do ficheiro broadcast-source.cpp */
     const int   fs_tag    = 14;
     const int   fs_handle = 20;
-    const float ih  = 36.0f;   /* altura por item */
-    const float px  = 20.0f;   /* padding horizontal */
-    const float py  = 12.0f;   /* padding vertical */
-    const float gp  = 4.0f;    /* gap entre items */
-    const float mg  = 20.0f;   /* margem exterior */
+    const float ih  = 36.0f;
+    const float px  = 20.0f;
+    const float py  = 12.0f;
+    const float gp  = 4.0f;
+    const float mg  = 20.0f;
 
     float soc_opacity = ctx->opacity_global * ctx->opacity_social;
 
-    /* Calcula largura maxima do painel */
     float panel_w = 0.0f, panel_h = 0.0f;
     for (int i = 0; i < count; i++) {
         int j        = items[i].idx;
@@ -513,7 +441,6 @@ void render_social_media(BroadcastContext *ctx)
             bx = W - panel_w - mg; by = H - panel_h - mg - TICKER_BAR_HEIGHT - 10.0f; break;
     }
 
-    /* Fundo glass com opacidade */
     uint32_t soc_bg = apply_opacity(ctx->color_bg, soc_opacity);
     draw_rect_glass(ctx, bx, by, panel_w, panel_h, soc_bg, false);
 
@@ -523,14 +450,11 @@ void render_social_media(BroadcastContext *ctx)
         float tx  = bx + px;
         float ty  = cy + (ih - get_src_height(ctx->ts_social_handle[j], fs_handle)) * 0.5f;
 
-        /* Tag em bold */
         draw_text_source(ctx->ts_social_tag[j], tx, ty + 2.0f);
 
-        /* Handle em regular, a direita da tag */
         float tag_w = get_src_width(ctx->ts_social_tag[j], SOCIAL_TAGS[j], fs_tag);
         draw_text_source(ctx->ts_social_handle[j], tx + tag_w + 8.0f, ty);
 
-        /* Separador (exceto no ultimo item) */
         if (i < count - 1) {
             uint32_t sep_color = apply_opacity(0x33FFFFFF, soc_opacity);
             draw_rect(bx + 10.0f, cy + ih, panel_w - 20.0f, 1.0f, sep_color);

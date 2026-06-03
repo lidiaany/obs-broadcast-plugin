@@ -57,6 +57,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_
 if(WIN32)
     target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ws2_32)
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE /std:c++20)
 endif()
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
