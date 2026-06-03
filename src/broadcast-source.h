@@ -4,6 +4,10 @@
  * Define a estrutura de contexto do plugin e declara todas as funções
  * callback que o OBS utiliza para gerenciar a source personalizada.
  *
+ * Texto renderizado via child sources oficiais do OBS:
+ *   - text_gdiplus  (Windows / macOS)
+ *   - text_ft2_source_v2 (Linux)
+ *
  * ============================================================================
  */
 
@@ -29,8 +33,6 @@
 #define LT_DISPLAY_DURATION   8.0f
 #define TICKER_DEFAULT_SPEED  80.0f
 #define TICKER_BAR_HEIGHT     40
-#define FONT_CACHE_SIZE       8
-#define FONT_CACHE_TOTAL      16
 #define LOWER_THIRD_HEIGHT    120
 #define OVERLAY_PADDING       20
 
@@ -111,26 +113,31 @@ struct BroadcastContext {
     float    ticker_offset;
 
     /* ── WEBSOCKET SERVER ──────────────────────────────────────────────── */
-    WebSocketServer *ws_server;         /* Servidor WebSocket (controle remoto) */
-    int              ws_port;           /* Porta do servidor WebSocket */
-    bool             ws_enabled;        /* Se o WebSocket está habilitado */
+    WebSocketServer *ws_server;
+    int              ws_port;
+    bool             ws_enabled;
 
     /* ── SHADER EFFECTS ─────────────────────────────────────────────────── */
-    gs_effect_t *effect_glass;         /* Efeito de vidro fosco (frosted glass) */
-    gs_eparam_t *ep_glass_color;       /* Parâmetro: color */
-    gs_eparam_t *ep_glass_highlight;   /* Parâmetro: highlight_color */
-    gs_eparam_t *ep_glass_top;         /* Parâmetro: gradient_top */
-    gs_eparam_t *ep_glass_bot;         /* Parâmetro: gradient_bot */
-    gs_eparam_t *ep_glass_noise;       /* Parâmetro: noise_strength */
-    gs_eparam_t *ep_glass_tint;        /* Parâmetro: glass_tint */
-    gs_eparam_t *ep_glass_hl_width;    /* Parâmetro: highlight_width */
-    bool         glass_loaded;         /* Se o shader foi carregado com sucesso */
+    gs_effect_t *effect_glass;
+    gs_eparam_t *ep_glass_color;
+    gs_eparam_t *ep_glass_highlight;
+    gs_eparam_t *ep_glass_top;
+    gs_eparam_t *ep_glass_bot;
+    gs_eparam_t *ep_glass_noise;
+    gs_eparam_t *ep_glass_tint;
+    gs_eparam_t *ep_glass_hl_width;
+    bool         glass_loaded;
 
-    /* ── FONT CACHING ──────────────────────────────────────────────────── */
-    gs_font_t font_cache[FONT_CACHE_TOTAL];
-    int       font_sizes[FONT_CACHE_TOTAL];
-    bool      font_cache_bold[FONT_CACHE_TOTAL];
-    bool      font_dirty;
+    /* ── TEXT SOURCES (child sources — API legítima do OBS para texto) ── */
+    /* O OBS não tem gs_font_t. Texto é renderizado via child sources:     */
+    /*   text_gdiplus (Windows/macOS) ou text_ft2_source_v2 (Linux).      */
+    obs_source_t *ts_lt_name;           /* Lower Third: nome */
+    obs_source_t *ts_lt_title;          /* Lower Third: cargo */
+    obs_source_t *ts_gc;                /* GC: texto central */
+    obs_source_t *ts_ticker;            /* Ticker: texto corrido */
+    obs_source_t *ts_social_tag[4];     /* Social: labels (IG, TK, FB, YT) */
+    obs_source_t *ts_social_handle[4];  /* Social: handles */
+    int           gc_font_size;         /* Tamanho de fonte actual do GC */
 };
 
 /* ============================================================================
@@ -151,6 +158,16 @@ void broadcast_video_tick(void *data, float seconds);
 /* Processa comandos recebidos via WebSocket */
 void broadcast_process_ws_commands(void *data);
 
+/* ── Tags fixas das redes sociais ────────────────────────────────────────── */
+extern const char *SOCIAL_TAGS[4];
+
+/* ── Text source helpers ────────────────────────────────────────────────── */
+obs_source_t *broadcast_create_text_src(const char *text, uint32_t argb_color,
+                                         int font_size, bool bold);
+void          broadcast_update_text_src(obs_source_t **src_ptr, const char *text,
+                                         uint32_t argb_color, int font_size, bool bold);
+void          broadcast_destroy_text_src(obs_source_t **src_ptr);
+
 /* ============================================================================
  * FUNÇÕES AUXILIARES DE RENDERIZAÇÃO
  * ============================================================================ */
@@ -169,10 +186,8 @@ void draw_gradient_rect(float x, float y, float w, float h,
 void draw_rect_glass(BroadcastContext *ctx, float x, float y,
                       float w, float h, uint32_t color, bool vertical);
 
-/* ── Carrega os shaders do disco ───────────────────────────────────────── */
+/* ── Carrega / libera shaders ──────────────────────────────────────────── */
 void broadcast_load_effects(BroadcastContext *ctx);
-
-/* ── Libera os shaders ─────────────────────────────────────────────────── */
 void broadcast_unload_effects(BroadcastContext *ctx);
 
 /* ============================================================================
@@ -183,7 +198,6 @@ float ease_out_cubic(float t);
 float ease_in_out_cubic(float t);
 
 #define bfree_safe(ptr)  do { if (ptr) { bfree(ptr); (ptr) = NULL; } } while(0)
-#define font_destroy_safe(font)  do { if (font) { gs_font_destroy(font); (font) = NULL; } } while(0)
 
 #define GET_ALPHA_F(color)  (((float)(((color) >> 24) & 0xFF)) / 255.0f)
 #define GET_ALPHA(color)    (((color) >> 24) & 0xFF)

@@ -1,31 +1,32 @@
 /* ============================================================================
  * websocket-server.cpp — WebSocket Server Implementation
  *
- * Implementação completa do servidor WebSocket para controle remoto do
+ * Implementacao completa do servidor WebSocket para controle remoto do
  * Broadcast Overlay System via comandos JSON.
  *
- * Contém implementações nativas de:
+ * Contem implementacoes nativas de:
  *   - SHA1 (para handshake WebSocket RFC 6455)
- *   - Base64 (para codificação da chave de handshake)
+ *   - Base64 (para codificacao da chave de handshake)
  *   - Servidor TCP (cross-platform: Winsock2 / POSIX)
  *   - Protocolo WebSocket (framing, masking, ping/pong)
  *
  * ============================================================================
  */
 
+#include <obs-module.h>
 #include "websocket-server.h"
 #include <vector>
 #include <sstream>
 
 /* ============================================================================
- * IMPLEMENTAÇÃO SHA1
+ * IMPLEMENTACAO SHA1
  * ============================================================================
  * SHA-1 hash function implementation (FIPS 180-4).
- * Implementação minimalista sem dependências externas.
- * Necessária para o handshake WebSocket (Sec-WebSocket-Accept).
+ * Implementacao minimalista sem dependencias externas.
+ * Necessaria para o handshake WebSocket (Sec-WebSocket-Accept).
  */
 
-/* Rotação circular à esquerda de 32 bits */
+/* Rotacao circular a esquerda de 32 bits */
 #define SHA1_ROTL(x, n)  (((x) << (n)) | ((x) >> (32 - (n))))
 
 /* Constantes SHA1 */
@@ -42,7 +43,7 @@ void WebSocketServer::sha1_hash(const uint8_t *data, size_t len, uint8_t out[20]
     uint32_t h3 = 0x10325476;
     uint32_t h4 = 0xC3D2E1F0;
 
-    /* Pré-processamento: padding */
+    /* Pre-processamento: padding */
     size_t ml = len * 8; /* tamanho em bits */
     size_t padded_len = ((len + 8 + 64) / 64) * 64;
     std::vector<uint8_t> padded(padded_len, 0);
@@ -103,7 +104,7 @@ void WebSocketServer::sha1_hash(const uint8_t *data, size_t len, uint8_t out[20]
         h4 += e;
     }
 
-    /* Saída em big-endian */
+    /* Saida em big-endian */
     for (int i = 0; i < 4; i++) {
         out[i]      = (uint8_t)((h0 >> (24 - i * 8)) & 0xFF);
         out[4 + i]  = (uint8_t)((h1 >> (24 - i * 8)) & 0xFF);
@@ -114,7 +115,7 @@ void WebSocketServer::sha1_hash(const uint8_t *data, size_t len, uint8_t out[20]
 }
 
 /* ============================================================================
- * IMPLEMENTAÇÃO BASE64
+ * IMPLEMENTACAO BASE64
  * ============================================================================
  * Base64 encode (RFC 4648). Usada para codificar o hash SHA1 durante o
  * handshake WebSocket.
@@ -169,7 +170,7 @@ WebSocketServer::~WebSocketServer()
 bool WebSocketServer::start(int port)
 {
     if (running_) {
-        blog(LOG_WARNING, "[Broadcast WS] Servidor já está rodando na porta %d", port_);
+        blog(LOG_WARNING, "[Broadcast WS] Servidor ja esta rodando na porta %d", port_);
         return false;
     }
 
@@ -195,14 +196,14 @@ bool WebSocketServer::start(int port)
         return false;
     }
 
-    /* Permite reutilizar o endereço (evita \"Address already in use\") */
+    /* Permite reutilizar o endereco (evita "Address already in use") */
     int reuse = 1;
     if (setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR,
                    (const char*)&reuse, sizeof(reuse)) == SOCKET_ERR) {
-        blog(LOG_WARNING, "[Broadcast WS] Aviso: não foi possível setar SO_REUSEADDR");
+        blog(LOG_WARNING, "[Broadcast WS] Aviso: nao foi possivel setar SO_REUSEADDR");
     }
 
-    /* Configura endereço do servidor */
+    /* Configura endereco do servidor */
     struct sockaddr_in addr;
     std::memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
@@ -221,7 +222,7 @@ bool WebSocketServer::start(int port)
         return false;
     }
 
-    /* Listen (backlog de 1 conexão — só uma por vez) */
+    /* Listen (backlog de 1 conexao — so uma por vez) */
     if (listen(server_fd_, 1) == SOCKET_ERR) {
         blog(LOG_ERROR, "[Broadcast WS] Falha no listen (erro: %d)",
              SOCKET_LAST_ERROR());
@@ -244,7 +245,7 @@ bool WebSocketServer::start(int port)
 /* ============================================================================
  * SERVER STOP
  * ============================================================================
- * Para o servidor e fecha a conexão. Thread-safe.
+ * Para o servidor e fecha a conexao. Thread-safe.
  */
 void WebSocketServer::stop()
 {
@@ -281,44 +282,45 @@ void WebSocketServer::stop()
 /* ============================================================================
  * THREAD DO SERVIDOR
  * ============================================================================
- * Loop principal: aceita conexões, faz handshake, processa mensagens.
+ * Loop principal: aceita conexoes, faz handshake, processa mensagens.
  * Executa em thread separada.
  */
 void WebSocketServer::server_thread_func()
 {
     blog(LOG_DEBUG, "[Broadcast WS] Thread do servidor iniciada.");
 
-    while (running_) {    /* Aceita uma conexão (blocking, mas interrompido pelo close do socket) */
-    struct sockaddr_in client_addr;
-    socklen_t addr_len = sizeof(client_addr);
-    socket_t client_fd = accept(server_fd_,
-                                 (struct sockaddr*)&client_addr,
-                                 &addr_len);
+    while (running_) {
+        /* Aceita uma conexao (blocking, mas interrompido pelo close do socket) */
+        struct sockaddr_in client_addr;
+        socklen_t addr_len = sizeof(client_addr);
+        socket_t client_fd = accept(server_fd_,
+                                     (struct sockaddr*)&client_addr,
+                                     &addr_len);
 
-    if (!running_) {
-        /* Servidor foi parado enquanto accept() aguardava */
-        if (client_fd != INVALID_SOCKET_VALUE) {
-            CLOSE_SOCKET(client_fd);
+        if (!running_) {
+            /* Servidor foi parado enquanto accept() aguardava */
+            if (client_fd != INVALID_SOCKET_VALUE) {
+                CLOSE_SOCKET(client_fd);
+            }
+            break;
         }
-        break;
-    }
 
-    if (client_fd == INVALID_SOCKET_VALUE) {
-        if (running_) {
-            blog(LOG_WARNING, "[Broadcast WS] Erro no accept (erro: %d)",
-                 SOCKET_LAST_ERROR());
+        if (client_fd == INVALID_SOCKET_VALUE) {
+            if (running_) {
+                blog(LOG_WARNING, "[Broadcast WS] Erro no accept (erro: %d)",
+                     SOCKET_LAST_ERROR());
+            }
+            continue;
         }
-        continue;
-    }
 
-    char client_ip[64] = {0};
-    inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, sizeof(client_ip));
+        char client_ip[64] = {0};
+        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, sizeof(client_ip));
         blog(LOG_INFO, "[Broadcast WS] Cliente conectado: %s", client_ip);
 
         /* Gerencia o cliente (handshake + loop de mensagens) */
         handle_client(client_fd);
 
-        /* Fecha conexão com o cliente */
+        /* Fecha conexao com o cliente */
         CLOSE_SOCKET(client_fd);
         blog(LOG_INFO, "[Broadcast WS] Cliente desconectado: %s", client_ip);
     }
@@ -333,13 +335,13 @@ void WebSocketServer::server_thread_func()
  */
 void WebSocketServer::handle_client(socket_t client_fd)
 {
-    /* 1. Realiza handshake HTTP → WebSocket */
+    /* 1. Realiza handshake HTTP -> WebSocket */
     if (!perform_handshake(client_fd)) {
         blog(LOG_WARNING, "[Broadcast WS] Handshake falhou");
         return;
     }
 
-    blog(LOG_INFO, "[Broadcast WS] Handshake concluído. Pronto para receber comandos.");
+    blog(LOG_INFO, "[Broadcast WS] Handshake concluido. Pronto para receber comandos.");
 
     /* 2. Loop de mensagens */
     while (running_) {
@@ -400,10 +402,10 @@ void WebSocketServer::handle_client(socket_t client_fd)
 /* ============================================================================
  * PERFORM HANDSHAKE
  * ============================================================================
- * Lê a requisição HTTP de upgrade do cliente e responde com o handshake
+ * Le a requisicao HTTP de upgrade do cliente e responde com o handshake
  * WebSocket (RFC 6455 Section 4).
  *
- * Formato da requisição do cliente:
+ * Formato da requisicao do cliente:
  *   GET / HTTP/1.1
  *   Host: ...
  *   Upgrade: websocket
@@ -430,7 +432,7 @@ bool WebSocketServer::perform_handshake(socket_t client_fd)
     const char *key_marker = "Sec-WebSocket-Key: ";
     const char *key_start = std::strstr(buffer, key_marker);
     if (!key_start) {
-        blog(LOG_WARNING, "[Broadcast WS] Handshake: campo Sec-WebSocket-Key não encontrado");
+        blog(LOG_WARNING, "[Broadcast WS] Handshake: campo Sec-WebSocket-Key nao encontrado");
         return false;
     }
     key_start += strlen(key_marker);
@@ -443,7 +445,7 @@ bool WebSocketServer::perform_handshake(socket_t client_fd)
 
     std::string client_key(key_start, key_end - key_start);
 
-    /* Concatena com a GUID mágica */
+    /* Concatena com a GUID magica */
     std::string concat = client_key + WS_MAGIC_GUID;
 
     /* Calcula SHA1 */
@@ -472,7 +474,7 @@ bool WebSocketServer::perform_handshake(socket_t client_fd)
 /* ============================================================================
  * READ FRAME
  * ============================================================================
- * Lê um frame WebSocket (RFC 6455 Section 5.2).
+ * Le um frame WebSocket (RFC 6455 Section 5.2).
  *
  * Formato do frame:
  *   Byte 0: FIN (1 bit) | RSV (3 bits) | Opcode (4 bits)
@@ -489,7 +491,7 @@ bool WebSocketServer::perform_handshake(socket_t client_fd)
  *   0xA = Pong
  *
  * Retorna true se leu um frame de texto com sucesso.
- * O payload é retornado sem máscara (já decodificado).
+ * O payload e retornado sem mascara (ja decodificado).
  */
 bool WebSocketServer::read_frame(socket_t client_fd, std::string &payload)
 {
@@ -509,7 +511,7 @@ bool WebSocketServer::read_frame(socket_t client_fd, std::string &payload)
     /* Sanity check: rejeita frames maiores que 1MB */
     static const uint64_t MAX_FRAME_SIZE = 1024 * 1024;
 
-    /* Lê tamanho extended */
+    /* Le tamanho extended */
     if (len == 126) {
         uint8_t ext[2];
         if (recv(client_fd, (char*)ext, 2, MSG_WAITALL) != 2) return false;
@@ -523,7 +525,7 @@ bool WebSocketServer::read_frame(socket_t client_fd, std::string &payload)
         }
     }
 
-    /* Valida tamanho máximo para evitar DoS */
+    /* Valida tamanho maximo para evitar DoS */
     if (len > MAX_FRAME_SIZE) {
         blog(LOG_WARNING, "[Broadcast WS] Frame muito grande: %llu bytes (max: %llu)",
              (unsigned long long)len,
@@ -531,13 +533,13 @@ bool WebSocketServer::read_frame(socket_t client_fd, std::string &payload)
         return false;
     }
 
-    /* Lê masking key (se mascarado) */
+    /* Le masking key (se mascarado) */
     uint8_t mask[4] = {0};
     if (masked) {
         if (recv(client_fd, (char*)mask, 4, MSG_WAITALL) != 4) return false;
     }
 
-    /* Lê payload */
+    /* Le payload */
     std::vector<uint8_t> data((size_t)len);
     if (len > 0) {
         uint64_t total = 0;
@@ -549,7 +551,7 @@ bool WebSocketServer::read_frame(socket_t client_fd, std::string &payload)
         }
     }
 
-    /* Aplica máscara (XOR com masking key) */
+    /* Aplica mascara (XOR com masking key) */
     if (masked) {
         for (uint64_t i = 0; i < len; i++) {
             data[(size_t)i] ^= mask[i % 4];
@@ -566,12 +568,27 @@ bool WebSocketServer::read_frame(socket_t client_fd, std::string &payload)
             blog(LOG_INFO, "[Broadcast WS] Cliente enviou close frame");
             return false;
 
-        case 0x9: /* Ping — responde com Pong */
+        case 0x9: /* Ping — responde com Pong (RFC 6455 Section 5.5.3) */
         {
-            uint8_t pong[2] = {0x8A, 0x00}; /* FIN + Opcode 0xA (Pong), length 0 */
-            send(client_fd, (char*)pong, 2, 0);
+            /* RFC 6455 exige que o Pong ecoe os dados de aplicacao do Ping */
+            std::vector<uint8_t> pong_frame;
+            pong_frame.push_back(0x8A); /* FIN + Opcode 0xA (Pong) */
+            if (len < 126) {
+                pong_frame.push_back((uint8_t)len);
+            } else if (len < 65536) {
+                pong_frame.push_back(126);
+                pong_frame.push_back((uint8_t)((len >> 8) & 0xFF));
+                pong_frame.push_back((uint8_t)(len & 0xFF));
+            } else {
+                pong_frame.push_back(127);
+                for (int i = 7; i >= 0; i--) {
+                    pong_frame.push_back((uint8_t)((len >> (i * 8)) & 0xFF));
+                }
+            }
+            pong_frame.insert(pong_frame.end(), data.begin(), data.end());
+            send(client_fd, (const char*)pong_frame.data(), (int)pong_frame.size(), 0);
             payload.clear();
-            return true; /* Não é um comando, continua */
+            return true; /* Nao e um comando, continua */
         }
 
         case 0xA: /* Pong — apenas ignora */
@@ -587,7 +604,7 @@ bool WebSocketServer::read_frame(socket_t client_fd, std::string &payload)
 /* ============================================================================
  * SEND FRAME
  * ============================================================================
- * Envia um frame WebSocket de texto (sem máscara — apenas servidor → cliente).
+ * Envia um frame WebSocket de texto (sem mascara — apenas servidor -> cliente).
  */
 bool WebSocketServer::send_frame(socket_t client_fd, const std::string &payload)
 {
@@ -624,7 +641,7 @@ bool WebSocketServer::send_frame(socket_t client_fd, const std::string &payload)
 /* ============================================================================
  * POLL COMMAND
  * ============================================================================
- * Obtém o próximo comando da fila. Chamado pelo tick do OBS.
+ * Obtem o proximo comando da fila. Chamado pelo tick do OBS.
  * Thread-safe.
  */
 bool WebSocketServer::poll_command(WSCommand &cmd)
