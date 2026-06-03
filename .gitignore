@@ -1,49 +1,26 @@
-# ── Build directories ──────────────────────────────────────────────────────
-build/
-cmake-build-*/
-out/
+# Exclude everything
+/*
 
-# ── IDE / Editor ───────────────────────────────────────────────────────────
-.vs/
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
+# Except for default project files
+!/.github
+!/build-aux
+!/cmake
+!/data
+!/src
+!.clang-format
+!.gersemirc
+!.gitignore
+!buildspec.json
+!CMakeLists.txt
+!CMakePresets.json
+!LICENSE
+!README.md
 
-# ── CMake ──────────────────────────────────────────────────────────────────
-CMakeUserPresets.json
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-Makefile
-*.dir/
+# Exclude lock files
+*.lock.json
 
-# ── Compiler outputs ───────────────────────────────────────────────────────
-*.o
-*.obj
-*.exe
-*.dll
-*.so
-*.dylib
-*.pdb
-*.ilk
-*.exp
-*.lib
-*.a
-
-# ── CI / SDK ───────────────────────────────────────────────────────────────
-/obs-sdk/
-
-# ── macOS ──────────────────────────────────────────────────────────────────
+# Exclude macOS legacy resource forks
 .DS_Store
 
-# ── Python / virtualenv ────────────────────────────────────────────────────
-__pycache__/
-*.pyc
-.env/
-venv/
-
-# ── OS junk ────────────────────────────────────────────────────────────────
-Thumbs.db
-Desktop.ini
+# Exclude CMake build number cache
+/cmake/.CMakeBuildNumber
