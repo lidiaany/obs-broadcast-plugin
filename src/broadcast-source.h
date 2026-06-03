@@ -124,6 +124,11 @@ struct BroadcastContext {
     float    lt_visible_time;
     float    ticker_offset;
 
+    /* ── ANIMACAO LOWER THIRD ─────────────────────────────────────────── */
+    char   *lt_anim_type;        /* "slide"(padrao), "fade", "scale" */
+    char   *lt_anim_dir;         /* "left","right","up","down" (slide) */
+    float   lt_anim_duration;    /* duracao em segundos (default LT_ANIM_DURATION) */
+
     /* ── ANIMACAO GC ──────────────────────────────────────────────────── */
     float   gc_anim_progress;    /* 0.0 -> 1.0 durante animacao */
     int     gc_anim_state;       /* 1 = entrando, 0 = parado, -1 = saindo */

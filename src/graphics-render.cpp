@@ -239,15 +239,54 @@ void render_lower_third(BroadcastContext *ctx)
     const float tx_off = pad + side_w + 15.0f;
 
     float anim       = ease_out_cubic(ctx->lt_anim_progress);
+
+    /* Determina tipo de animacao activo */
+    bool lt_anim_active = (ctx->lt_anim_state != 0.0f || ctx->lt_anim_progress < 1.0f);
+    const char *lt_type = "slide";
+    if (lt_anim_active && ctx->lt_anim_type && *ctx->lt_anim_type)
+        lt_type = ctx->lt_anim_type;
+
     float alpha_mult = 1.0f;
     float slide_off  = 0.0f;
+    float scale_s    = 1.0f;
 
-    if (ctx->lt_alignment == LT_ALIGN_LEFT) {
-        slide_off = -(1.0f - anim) * (tx_off + 600.0f);
-    } else if (ctx->lt_alignment == LT_ALIGN_RIGHT) {
-        slide_off = (1.0f - anim) * (W - tx_off + 600.0f);
-    } else {
+    gs_matrix_push();
+
+    if (strcmp(lt_type, "fade") == 0) {
+        /* Fade: opacidade cresce com o progresso */
         alpha_mult = anim;
+
+    } else if (strcmp(lt_type, "scale") == 0) {
+        /* Scale: escala do centro da barra */
+        float nw   = get_src_width(ctx->ts_lt_name,  ctx->lt_name,  36);
+        float tw   = (ctx->lt_title && strlen(ctx->lt_title) > 0)
+                     ? get_src_width(ctx->ts_lt_title, ctx->lt_title, 24) : 0.0f;
+        float maxw = (nw > tw) ? nw : tw;
+        float bgw  = maxw + pad * 2.0f + side_w + 20.0f;
+        if (bgw > W) bgw = W;
+
+        float bgx;
+        switch (ctx->lt_alignment) {
+            case LT_ALIGN_LEFT:   bgx = 0.0f;            break;
+            case LT_ALIGN_RIGHT:  bgx = W - bgw;         break;
+            default:              bgx = (W - bgw) * 0.5f; break;
+        }
+        float cx = bgx + bgw * 0.5f;
+        float cy = y_base + bar_h * 0.5f;
+        scale_s = 0.3f + 0.7f * anim;
+        gs_matrix_translate3f(cx, cy, 0.0f);
+        gs_matrix_scale3f(scale_s, scale_s, 1.0f);
+        gs_matrix_translate3f(-cx, -cy, 0.0f);
+
+    } else {
+        /* Slide (padrao): desliza da borda conforme alinhamento */
+        if (ctx->lt_alignment == LT_ALIGN_LEFT) {
+            slide_off = -(1.0f - anim) * (tx_off + 600.0f);
+        } else if (ctx->lt_alignment == LT_ALIGN_RIGHT) {
+            slide_off = (1.0f - anim) * (W - tx_off + 600.0f);
+        } else {
+            alpha_mult = anim;
+        }
     }
 
     float nw   = get_src_width(ctx->ts_lt_name,  ctx->lt_name,  36);
@@ -281,6 +320,8 @@ void render_lower_third(BroadcastContext *ctx)
     draw_text_source(ctx->ts_lt_name, bgx + tx_off, y_base + 20.0f);
     if (ctx->lt_title && strlen(ctx->lt_title) > 0)
         draw_text_source(ctx->ts_lt_title, bgx + tx_off, y_base + 65.0f);
+
+    gs_matrix_pop();
 }
 
 /* ============================================================================

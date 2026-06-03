@@ -254,6 +254,11 @@ void *broadcast_create(obs_data_t *settings, obs_source_t *source)
     ctx->elapsed         = 0.0f;
     ctx->lt_visible_time  = 0.0f;
 
+    /* Animacao LT */
+    ctx->lt_anim_type     = bstrdup("slide");
+    ctx->lt_anim_dir      = bstrdup("left");
+    ctx->lt_anim_duration = LT_ANIM_DURATION;
+
     /* Animacao GC */
     ctx->gc_anim_progress = 0.0f;
     ctx->gc_anim_state    = 0;
@@ -328,6 +333,8 @@ void broadcast_destroy(void *data)
     bfree_safe(ctx->tiktok);
     bfree_safe(ctx->facebook);
     bfree_safe(ctx->youtube);
+    bfree_safe(ctx->lt_anim_type);
+    bfree_safe(ctx->lt_anim_dir);
     bfree_safe(ctx->gc_anim_type);
     bfree_safe(ctx->gc_anim_dir);
 
@@ -394,6 +401,10 @@ void broadcast_process_ws_commands(void *data)
         obs_data_set_string(settings, "gc_anim_dir",  ctx->gc_anim_dir  ? ctx->gc_anim_dir  : "up");
         obs_data_set_double(settings, "gc_anim_duration", (double)ctx->gc_anim_duration);
 
+        obs_data_set_string(settings, "lt_anim_type", ctx->lt_anim_type ? ctx->lt_anim_type : "slide");
+        obs_data_set_string(settings, "lt_anim_dir",  ctx->lt_anim_dir  ? ctx->lt_anim_dir  : "left");
+        obs_data_set_double(settings, "lt_anim_duration", (double)ctx->lt_anim_duration);
+
         obs_data_set_bool(settings, "social_enabled",  ctx->social_enabled);
         obs_data_set_int (settings, "social_position", (int64_t)ctx->social_position);
         obs_data_set_string(settings, "social_instagram", ctx->instagram ? ctx->instagram : "");
@@ -411,6 +422,10 @@ void broadcast_process_ws_commands(void *data)
                 obs_data_set_bool(settings, "lt_enabled", obs_data_get_bool(cmd_data, "enabled"));
             if (obs_data_has_user_value(cmd_data, "duration"))
                 obs_data_set_double(settings, "lt_duration", obs_data_get_double(cmd_data, "duration"));
+            if (obs_data_has_user_value(cmd_data, "animation"))
+                obs_data_set_string(settings, "lt_anim_type", obs_data_get_string(cmd_data, "animation"));
+            if (obs_data_has_user_value(cmd_data, "direction"))
+                obs_data_set_string(settings, "lt_anim_dir", obs_data_get_string(cmd_data, "direction"));
             needs_update = true;
 
         } else if (cmd.type == "gc") {
@@ -460,16 +475,25 @@ void broadcast_process_ws_commands(void *data)
         } else if (cmd.type == "animate") {
             const char *target = obs_data_get_string(cmd_data, "target");
             if (target && *target) {
+                const char *anim_type = obs_data_get_string(cmd_data, "animation");
                 if (strcmp(target, "gc") == 0) {
-                    const char *anim_type = obs_data_get_string(cmd_data, "animation");
                     if (anim_type && *anim_type)
                         obs_data_set_string(settings, "gc_anim_type", anim_type);
                     if (obs_data_has_user_value(cmd_data, "duration"))
                         obs_data_set_double(settings, "gc_anim_duration", obs_data_get_double(cmd_data, "duration"));
                     if (obs_data_has_user_value(cmd_data, "direction"))
                         obs_data_set_string(settings, "gc_anim_dir", obs_data_get_string(cmd_data, "direction"));
-                    /* Forca o inicio da animacao */
                     obs_data_set_int(settings, "gc_anim_trigger", 1);
+                } else if (strcmp(target, "lower_third") == 0) {
+                    if (anim_type && *anim_type)
+                        obs_data_set_string(settings, "lt_anim_type", anim_type);
+                    if (obs_data_has_user_value(cmd_data, "duration"))
+                        obs_data_set_double(settings, "lt_anim_duration", obs_data_get_double(cmd_data, "duration"));
+                    if (obs_data_has_user_value(cmd_data, "direction"))
+                        obs_data_set_string(settings, "lt_anim_dir", obs_data_get_string(cmd_data, "direction"));
+                    /* Forca a animacao — mostra o LT e re-triggers */
+                    obs_data_set_bool(settings, "lt_enabled", true);
+                    obs_data_set_int(settings, "lt_anim_trigger", 1);
                 }
             }
             needs_update = true;
@@ -581,7 +605,29 @@ void broadcast_update(void *data, obs_data_t *settings)
     ctx->gc_anim_duration = (float)obs_data_get_double(settings, "gc_anim_duration");
     if (ctx->gc_anim_duration <= 0.0f) ctx->gc_anim_duration = GC_ANIM_DURATION;
 
-    /* Dispara animacao se solicitado via WebSocket */
+    /* ── ANIMACAO LOWER THIRD ──────────────────────────────────────────── */
+    const char *new_lt_anim_type = obs_data_get_string(settings, "lt_anim_type");
+    if (new_lt_anim_type && *new_lt_anim_type) {
+        bfree_safe(ctx->lt_anim_type);
+        ctx->lt_anim_type = bstrdup(new_lt_anim_type);
+    }
+    const char *new_lt_anim_dir = obs_data_get_string(settings, "lt_anim_dir");
+    if (new_lt_anim_dir && *new_lt_anim_dir) {
+        bfree_safe(ctx->lt_anim_dir);
+        ctx->lt_anim_dir = bstrdup(new_lt_anim_dir);
+    }
+    ctx->lt_anim_duration = (float)obs_data_get_double(settings, "lt_anim_duration");
+    if (ctx->lt_anim_duration <= 0.0f) ctx->lt_anim_duration = LT_ANIM_DURATION;
+
+    /* Dispara animacao do LT se solicitado via WebSocket */
+    if (obs_data_has_user_value(settings, "lt_anim_trigger")) {
+        ctx->lt_anim_progress = 0.0f;
+        ctx->lt_anim_state    = 1.0f;
+        ctx->lt_is_visible    = true;
+        ctx->lt_visible_time  = 0.0f;
+    }
+
+    /* Dispara animacao GC se solicitado via WebSocket */
     if (obs_data_has_user_value(settings, "gc_anim_trigger")) {
         ctx->gc_anim_progress = 0.0f;
         ctx->gc_anim_state    = 1;
@@ -772,6 +818,10 @@ void broadcast_get_defaults(obs_data_t *settings)
     obs_data_set_default_double(settings, "opacity_ticker", 1.0);
     obs_data_set_default_double(settings, "opacity_social", 1.0);
 
+    obs_data_set_default_string(settings, "lt_anim_type", "slide");
+    obs_data_set_default_string(settings, "lt_anim_dir",  "left");
+    obs_data_set_default_double(settings, "lt_anim_duration", (double)LT_ANIM_DURATION);
+
     obs_data_set_default_string(settings, "gc_anim_type", "fade");
     obs_data_set_default_string(settings, "gc_anim_dir",  "up");
     obs_data_set_default_double(settings, "gc_anim_duration", (double)GC_ANIM_DURATION);
@@ -813,15 +863,16 @@ void broadcast_video_tick(void *data, float seconds)
 
     /* Animação do Lower Third */
     if (ctx->lt_enabled && ctx->lt_name && strlen(ctx->lt_name) > 0) {
+        float lt_dur = ctx->lt_anim_duration > 0.0f ? ctx->lt_anim_duration : LT_ANIM_DURATION;
         if (ctx->lt_anim_state > 0.0f) {
-            ctx->lt_anim_progress += seconds / LT_ANIM_DURATION;
+            ctx->lt_anim_progress += seconds / lt_dur;
             if (ctx->lt_anim_progress >= 1.0f) {
                 ctx->lt_anim_progress = 1.0f;
                 ctx->lt_anim_state    = 0.0f;
                 ctx->lt_is_visible    = true;
             }
         } else if (ctx->lt_anim_state < 0.0f) {
-            ctx->lt_anim_progress -= seconds / LT_ANIM_DURATION;
+            ctx->lt_anim_progress -= seconds / lt_dur;
             if (ctx->lt_anim_progress <= 0.0f) {
                 ctx->lt_anim_progress = 0.0f;
                 ctx->lt_anim_state    = 0.0f;

@@ -12,7 +12,13 @@
  *   - Ping/Pong: mantém conexão ativa
  *
  * Protocolo de comandos (JSON via WebSocket):
- *   { "command": "lower_third", "name": "...", "title": "...", "duration": 8.0 }
+ *   { "command": "lower_third",
+ *     "name": "...",
+ *     "title": "...",
+ *     "duration": 8.0,
+ *     "animation": "slide",    // "slide" | "fade" | "scale" (opcional)
+ *     "direction": "left"      // "left" | "right" | "up" | "down" (opcional, slide)
+ *   }
  *   { "command": "gc",          "text": "...", "enabled": true }
  *   { "command": "ticker",      "text": "...", "speed": 100.0, "enabled": true }
  *   { "command": "social",      "instagram": "@...", "tiktok": "@...", ... }
@@ -28,7 +34,7 @@
  *
  *   ── Animation ───────────────────────────────────────────────────────
  *   { "command": "animate",
- *     "target": "gc",          // Apenas "gc" por enquanto
+ *     "target": "gc",          // "gc" | "lower_third"
  *     "animation": "fade",     // "fade" | "scale" | "slide"
  *     "duration": 2.0,          // Duracao em segundos (opcional)
  *     "direction": "up"        // "up" | "down" | "left" | "right" (slide)
