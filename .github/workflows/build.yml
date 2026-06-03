@@ -181,18 +181,19 @@ jobs:
       # ══════════════════════════════════════════════════════════════════════
 
       - name: Configure CMake
-        run: |
-          cmake -S . -B build `
-            -G "${{ matrix.generator }}" `
-            ${{ matrix.cmake-arch || '' }} `
-            -DCMAKE_BUILD_TYPE="${{ env.CMAKE_BUILD_TYPE }}" `
-            ${{ runner.os != 'Windows' && '-DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache' || '' }} `
-            -DCMAKE_PREFIX_PATH="${{ matrix.cmake-prefix }}" `
-            -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/install"
+        run: >
+          cmake -S . -B build
+          -G "${{ matrix.generator }}"
+          ${{ matrix.cmake-arch || '' }}
+          -DCMAKE_BUILD_TYPE="${{ env.CMAKE_BUILD_TYPE }}"
+          ${{ runner.os != 'Windows' && '-DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache' || '' }}
+          -DCMAKE_PREFIX_PATH="${{ matrix.cmake-prefix }}"
+          -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/install"
 
       - name: Build Plugin
-        run: |
-          cmake --build build --config "${{ env.CMAKE_BUILD_TYPE }}" --parallel $(nproc 2>/dev/null || echo 2)
+        run: >
+          cmake --build build --config "${{ env.CMAKE_BUILD_TYPE }}"
+          --parallel $(nproc 2>/dev/null || echo 2)
 
       - name: Install Plugin
         run: |
