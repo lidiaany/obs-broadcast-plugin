@@ -133,15 +133,9 @@ jobs:
 
           # ── 1. Clone OBS Studio (shallow, tag + submodules) ────────────
           Write-Host "::group::[1/3] Cloning OBS Studio $tag"
-          git clone --depth 1 --branch $tag `
+          git clone --depth 1 --branch $tag --recurse-submodules `
             https://github.com/obsproject/obs-studio.git "$obsDir" 2>&1
           if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
-          # OBS 32+ precisa dos submodules (ex: libdshowcapture)
-          Push-Location "$obsDir"
-          git submodule update --init --depth 1 2>&1
-          $exitSub = $LASTEXITCODE
-          Pop-Location
-          if ($exitSub -ne 0) { throw "git submodule update failed (exit: $exitSub)" }
           Write-Host "OBS source cloned to $obsDir"
           Write-Host "::endgroup::"
 
