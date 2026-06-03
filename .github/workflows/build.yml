@@ -139,10 +139,12 @@ jobs:
           Write-Host "OBS source cloned to $obsDir"
           Write-Host "::endgroup::"
 
-          # ── 2. Configure OBS with CMake preset ──────────────────────────
-          Write-Host "::group::[2/3] Configuring OBS (cmake --preset windows-x64)"
+          # ── 2. Configure OBS (x64 only — evita x86 que precisa libdshowcapture) ─
+          Write-Host "::group::[2/3] Configuring OBS (x64 only)"
           Push-Location "$obsDir"
-          cmake --preset windows-x64 2>&1
+          cmake -S . -B "$obsBuild" `
+            -G "Visual Studio 17 2022" -A x64 -T host=x64 `
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo 2>&1
           $exitCode = $LASTEXITCODE
           Pop-Location
           if ($exitCode -ne 0) { throw "OBS cmake configure failed (exit: $exitCode)" }
@@ -152,7 +154,7 @@ jobs:
           # ── 3. Build OBS (libobs and generate SDK) ──────────────────────
           Write-Host "::group::[3/3] Building OBS (this may take 20-40 min)"
           Push-Location "$obsDir"
-          cmake --build --preset windows-x64 --target libobs 2>&1
+          cmake --build "$obsBuild" --target libobs --config RelWithDebInfo --parallel 2>&1
           $exitCode = $LASTEXITCODE
           Pop-Location
           if ($exitCode -ne 0) { throw "OBS build failed (exit: $exitCode)" }
