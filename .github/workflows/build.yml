@@ -193,7 +193,7 @@ jobs:
       - name: Build Plugin
         run: >
           cmake --build build --config "${{ env.CMAKE_BUILD_TYPE }}"
-          --parallel $(nproc 2>/dev/null || echo 2)
+          --parallel
 
       - name: Install Plugin
         run: |
@@ -203,8 +203,18 @@ jobs:
       # PACKAGE & UPLOAD
       # ══════════════════════════════════════════════════════════════════════
 
-      - name: Prepare Artifacts
-        shell: bash
+      - name: Prepare Artifacts (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Copy-Item -Recurse -Force install\* artifacts\ -ErrorAction SilentlyContinue
+          Write-Host "::group::Artifacts"
+          Get-ChildItem -Recurse -File artifacts | Sort-Object FullName
+            | ForEach-Object { $_.FullName }
+          Write-Host "::endgroup::"
+
+      - name: Prepare Artifacts (Unix)
+        if: runner.os != 'Windows'
         run: |
           mkdir -p artifacts
           cp -r install/* artifacts/ || true
