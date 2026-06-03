@@ -541,6 +541,8 @@ void broadcast_process_ws_commands(void *data)
                 obs_data_set_int(settings, "social_carousel_force_next", 1);
             if (obs_data_has_user_value(cmd_data, "index"))
                 obs_data_set_int(settings, "social_carousel_force_index", obs_data_get_int(cmd_data, "index"));
+            if (obs_data_has_user_value(cmd_data, "reset"))
+                obs_data_set_int(settings, "social_carousel_reset", 1);
             needs_update = true;
 
         } else if (cmd.type == "opacity") {
@@ -756,6 +758,24 @@ void broadcast_update(void *data, obs_data_t *settings)
             if (handles[fi] && strlen(handles[fi]) > 0) {
                 ctx->social_carousel_index = fi;
                 ctx->social_carousel_timer = 0.0f;
+            }
+        }
+    }
+
+    /* Reset carousel to first valid handle (via WebSocket) */
+    if (obs_data_has_user_value(settings, "social_carousel_reset")) {
+        ctx->social_carousel_index = 0;
+        ctx->social_carousel_timer = 0.0f;
+        /* Se index 0 estiver vazio, avança para o primeiro válido */
+        const char *handles[4] = {
+            ctx->instagram, ctx->tiktok, ctx->facebook, ctx->youtube
+        };
+        if (!handles[0] || strlen(handles[0]) == 0) {
+            for (int i = 1; i < 4; i++) {
+                if (handles[i] && strlen(handles[i]) > 0) {
+                    ctx->social_carousel_index = i;
+                    break;
+                }
             }
         }
     }

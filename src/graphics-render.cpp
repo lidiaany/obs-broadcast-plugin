@@ -444,7 +444,7 @@ void render_lower_third(BroadcastContext *ctx)
     /* Glow dourado suave */
     if (ctx->glow_strength > 0.0f) {
         draw_accent_line(bgx, y_base, side_w * 0.5f, accent_h,
-                         apply_opacity(COLOR_GOLD, (uint32_t)(total_alpha * 0.5f)),
+                         apply_opacity(COLOR_GOLD, total_alpha * 0.5f),
                          ctx->glow_strength * total_alpha);
     }
 
