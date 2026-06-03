@@ -954,11 +954,12 @@ struct obs_source_info broadcast_overlay_source_info = {
     .get_properties = broadcast_get_properties,
     .update        = broadcast_update,
 
+    .video_tick   = broadcast_video_tick,
+
     .get_width  = broadcast_get_width,
     .get_height = broadcast_get_height,
 
     .video_render = broadcast_video_render,
-    .video_tick   = broadcast_video_tick,
 
     .icon_type = OBS_ICON_TYPE_CUSTOM,
 };
