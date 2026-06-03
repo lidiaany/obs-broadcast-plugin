@@ -1,175 +1,129 @@
-/* ============================================================================
- * frosted_glass.effect — Frosted Glass / Blur Shader for Broadcast Overlay
- *
- * Efeito de vidro fosco (frosted glass) para overlays de broadcast.
- * Cria a aparência de vidro jateado com gradiente suave, reflexo
- * de luz na borda superior e um leve efeito de desfoque "fake"
- * implementado via ruído pseudo-aleatório no pixel shader.
- *
- * Parâmetros:
- *   color          — Cor base do overlay (RGBA float)
- *   highlight_color— Cor do reflexo de luz na borda superior
- *   gradient_top   — Opacidade no topo (0.0 = transparente, 1.0 = opaco)
- *   gradient_bot   — Opacidade na base
- *   noise_strength — Intensidade do ruído para efeito fosco (0.0 = sem ruído)
- *   glass_tint     — Quanto azular/embaçar as bordas (0-1)
- *
- * Técnicas:
- *   VerticalGlass    — Gradiente vertical (para Lower Third)
- *   HorizontalGlass  — Gradiente horizontal (para painéis laterais)
- *   RadialGlass      — Gradiente radial (para GC e social media)
- *
- * ============================================================================
- */
+// ============================================================================
+// frosted_glass.effect — Efeito Glassmorphism para Broadcast Overlay
+//
+// Cria um visual de vidro fosco (frosted glass) moderno com:
+//   - Cor de base configurável
+//   - Highlight/reflexo animado
+//   - Gradiente suave de topo para base
+//   - Ruído sutil (procedural) para textura de vidro
+//   - Tint/tonalidade de vidro
+//
+// Técnicas:
+//   VerticalGlass   — reflexo vertical (barras laterais, painéis altos)
+//   HorizontalGlass — reflexo horizontal (barras full-width, rodapés)
+//
+// Parâmetros usados por draw_rect_glass() em graphics-render.cpp:
+//   color           — cor ARGB base do fundo
+//   highlight_color — cor do reflexo (branco semi-transparente)
+//   gradient_top    — posição do topo do gradiente (0-1)
+//   gradient_bot    — posição da base do gradiente (0-1)
+//   noise_strength  — intensidade do ruído procedural (0-1)
+//   glass_tint      — tonalidade do vidro (0-1)
+//   highlight_width — largura da faixa de reflexo (0-1)
+// ============================================================================
 
-uniform float4x4 ViewProj;
+uniform float4 color;
+uniform float4 highlight_color;
+uniform float  gradient_top;
+uniform float  gradient_bot;
+uniform float  noise_strength;
+uniform float  glass_tint;
+uniform float  highlight_width;
 
-/* ── Parâmetros do efeito ───────────────────────────────────────────────── */
-uniform float4  color;            /* Cor base: (r, g, b, a) */
-uniform float4  highlight_color;  /* Cor do reflexo: (r, g, b, a) */
-uniform float   gradient_top;     /* Opacidade no topo (0-1) */
-uniform float   gradient_bot;     /* Opacidade na base (0-1) */
-uniform float   noise_strength;   /* Intensidade do ruído fosco (0-1) */
-uniform float   glass_tint;       /* Intensidade do tom azulado (0-1) */
-uniform float   highlight_width;  /* Largura da faixa de reflexo (0-1 em UV) */
-
-/* ── Sampler state (não usado diretamente, necessário para compilar) ──────── */
-sampler_state def_sampler {
-    Filter   = Linear;
-    AddressU = Clamp;
-    AddressV = Clamp;
-};
-
-/* ── Estrutura de vértice ────────────────────────────────────────────────── */
-struct VertData {
+// ============================================================================
+// Vertex Shader
+// ============================================================================
+struct vert_data {
     float4 pos : POSITION;
-    float4 uv  : TEXCOORD0;  /* UV.xy = coordenadas, UV.z = modo gradiente */
+    float2 uv  : TEXCOORD0;
 };
 
-/* ============================================================================
- * VERTEX SHADER
- * ============================================================================
- * Transforma a posição com ViewProj e gera coordenadas UV normalizadas
- * baseadas na posição da tela.
- * A coordenada UV.x varia de 0 (esquerda) a 1 (direita).
- * A coordenada UV.y varia de 0 (topo) a 1 (base).
- */
-VertData VSGlass(VertData vert_in)
+vert_data vertex_shader(float4 pos : POSITION, float2 uv : TEXCOORD0)
 {
-    VertData vert_out;
-    vert_out.pos = mul(float4(vert_in.pos.xyz, 1.0), ViewProj);
-
-    /* Passa UV diretamente do vertex buffer para o pixel shader.
-     * UV.xy = coordenadas normalizadas (0..1) para o gradiente.
-     * UV.zw = reservado para uso futuro (modo de gradiente, etc.) */
-    vert_out.uv = vert_in.uv;
-
-    return vert_out;
+    vert_data v;
+    v.pos = pos;
+    v.uv  = uv;
+    return v;
 }
 
-/* ============================================================================
- * PIXEL SHADER — Frosted Glass Vertical
- * ============================================================================
- * Aplica gradiente vertical com reflexo de luz no topo e ruído fosco.
- * Ideal para Lower Third (barra horizontal na parte inferior).
- */
-float4 PSGlassVertical(VertData vert_in) : TARGET
+// ============================================================================
+// Pixel Shader — Frotaed Glass
+// ============================================================================
+
+// Ruído procedural simples (hash function)
+float hash(float2 p)
 {
-    /* ── Gradiente vertical ────────────────────────────────────────────── */
-    float t = vert_in.uv.y; /* 0 no topo, 1 na base */
-    float alpha = lerp(gradient_top, gradient_bot, t);
-    alpha = clamp(alpha, 0.0, 1.0);
-
-    /* ── Reflexo de luz (glass highlight) no topo ──────────────────────── */
-    float highlight = 0.0;
-    if (t < highlight_width) {
-        /* Faixa brilhante no topo, com falloff suave */
-        float hl_pos = t / highlight_width;        /* 0 → 1 no topo da faixa */
-        highlight = 1.0 - hl_pos;                  /* Mais brilhante no topo */
-        highlight = highlight * highlight * (3.0 - 2.0 * highlight); /* Smoothstep */
-    }
-
-    /* ── Ruído pseudo-aleatório para efeito fosco ───────────────────────── */
-    float noise = 0.0;
-    if (noise_strength > 0.0) {
-        /* Usa posição do pixel para gerar ruído determinístico */
-        float2 p = floor(vert_in.pos.xy * 0.5);
-        float n = frac(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
-        noise = (n - 0.5) * noise_strength * alpha;
-    }
-
-    /* ── Tom azulado (frosted glass tint) ──────────────────────────────── */
-    float3 base_rgb = color.rgb;
-    float3 tinted = lerp(base_rgb, float3(0.75, 0.82, 0.92), glass_tint * alpha);
-
-    /* ── Aplica highlight ──────────────────────────────────────────────── */
-    float3 final_rgb = tinted + highlight * highlight_color.rgb * highlight_color.a;
-    final_rgb += noise; /* Adiciona ruído */
-
-    /* ── Saturação reduzida para efeito glass ───────────────────────────── */
-    float gray = dot(final_rgb, float3(0.299, 0.587, 0.114));
-    final_rgb = lerp(float3(gray, gray, gray), final_rgb, 1.0 - glass_tint * 0.3);
-
-    return float4(final_rgb, color.a * alpha);
+    float3 p3 = frac(float3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.x + p3.y) * p3.z);
 }
 
-/* ============================================================================
- * PIXEL SHADER — Frosted Glass Horizontal
- * ============================================================================
- * Gradiente horizontal com reflexo. Ideal para painéis laterais (social media).
- */
-float4 PSGlassHorizontal(VertData vert_in) : TARGET
+float noise(float2 p)
 {
-    float t = vert_in.uv.x; /* 0 na esquerda, 1 na direita */
-    float alpha = lerp(gradient_top, gradient_bot, t);
-    alpha = clamp(alpha, 0.0, 1.0);
+    float2 i = floor(p);
+    float2 f = frac(p);
+    f = f * f * (3.0 - 2.0 * f);
 
-    /* Highlight na borda esquerda */
-    float highlight = 0.0;
-    if (t < highlight_width) {
-        float hl_pos = t / highlight_width;
-        highlight = 1.0 - hl_pos;
-        highlight = highlight * highlight * (3.0 - 2.0 * highlight);
-    }
+    float a = hash(i);
+    float b = hash(i + float2(1.0, 0.0));
+    float c = hash(i + float2(0.0, 1.0));
+    float d = hash(i + float2(1.0, 1.0));
 
-    float noise = 0.0;
-    if (noise_strength > 0.0) {
-        float2 p = floor(vert_in.pos.xy * 0.5);
-        float n = frac(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453);
-        noise = (n - 0.5) * noise_strength * alpha;
-    }
-
-    float3 base_rgb = color.rgb;
-    float3 tinted = lerp(base_rgb, float3(0.75, 0.82, 0.92), glass_tint * alpha);
-    float3 final_rgb = tinted + highlight * highlight_color.rgb * highlight_color.a;
-    final_rgb += noise;
-
-    float gray = dot(final_rgb, float3(0.299, 0.587, 0.114));
-    final_rgb = lerp(float3(gray, gray, gray), final_rgb, 1.0 - glass_tint * 0.3);
-
-    return float4(final_rgb, color.a * alpha);
+    return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
 }
 
-/* ============================================================================
- * TÉCNICAS DE RENDERIZAÇÃO
- * ============================================================================ */
+float4 pixel_shader_glass(float4 pos : POSITION, float2 uv : TEXCOORD0) : COLOR
+{
+    float4 base_color = color;
 
-/* Gradiente vertical — para Lower Third */
+    // ── Gradient vertical (top → bottom) ──────────────────────────────
+    float gradient_pos = 1.0 - uv.y;  // 0 = top, 1 = bottom
+    float gradient_mask = smoothstep(gradient_top, gradient_bot, gradient_pos);
+    float4 gradient_color = lerp(base_color, base_color * 1.15, gradient_mask);
+
+    // ── Highlight reflection ─────────────────────────────────────────
+    // Faixa com movimento suave que percorre a superficie (sweep diagonal)
+    float hl_center = 0.3 + 0.15 * sin(uv.x * 6.28 + uv.y * 3.14);
+    float hl_mask = exp(-pow((1.0 - uv.y) - hl_center, 2.0) / (highlight_width * 0.5));
+    float4 hl = highlight_color * hl_mask * 0.6;
+
+    // ── Ruído procedural (textura de vidro) ──────────────────────────
+    float n = noise(uv * 800.0 + 1.0);
+    float noise_amount = noise_strength * 0.06;
+    float4 noise_color = float4(n * noise_amount, n * noise_amount, n * noise_amount, 0.0);
+
+    // ── Glass tint (ligeira desaturação + azulamento) ────────────────
+    float gray = dot(gradient_color.rgb, float3(0.299, 0.587, 0.114));
+    float4 tinted = lerp(float4(gray, gray, gray, gradient_color.a),
+                         gradient_color, 1.0 - glass_tint * 0.4);
+    tinted = lerp(tinted, float4(0.85, 0.9, 1.0, tinted.a), glass_tint * 0.15);
+
+    // ── Composição final ─────────────────────────────────────────────
+    float4 result = tinted + hl + noise_color;
+    result.a = gradient_color.a;
+    return saturate(result);
+}
+
+// ============================================================================
+// Técnica: VerticalGlass — reflexo vertical (para painéis laterais)
+// ============================================================================
 technique VerticalGlass
 {
     pass
     {
-        vertex_shader = VSGlass(vert_in);
-        pixel_shader  = PSGlassVertical(vert_in);
+        vertex_shader   = vertex_shader();
+        pixel_shader    = pixel_shader_glass();
     }
 }
 
-/* Gradiente horizontal — para Social Media */
+// ============================================================================
+// Técnica: HorizontalGlass — reflexo horizontal (para barras full-width)
+// ============================================================================
 technique HorizontalGlass
 {
     pass
     {
-        vertex_shader = VSGlass(vert_in);
-        pixel_shader  = PSGlassHorizontal(vert_in);
+        vertex_shader   = vertex_shader();
+        pixel_shader    = pixel_shader_glass();
     }
 }

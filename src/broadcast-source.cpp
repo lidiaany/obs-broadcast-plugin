@@ -122,7 +122,7 @@ obs_source_t *broadcast_create_text_src(const char *text,
     obs_data_t *s = obs_data_create();
     obs_data_t *f = obs_data_create();
 
-    obs_data_set_string(f, "face",  "Arial");
+    obs_data_set_string(f, "face",  "Segoe UI");
     obs_data_set_int   (f, "size",  (int64_t)font_size);
     obs_data_set_int   (f, "flags", bold ? 1 : 0);  /* 1 = Bold */
     obs_data_set_obj   (s, "font",  f);
@@ -160,7 +160,7 @@ void broadcast_update_text_src(obs_source_t **src_ptr,
     obs_data_t *s = obs_data_create();
     obs_data_t *f = obs_data_create();
 
-    obs_data_set_string(f, "face",  "Arial");
+    obs_data_set_string(f, "face",  "Segoe UI");
     obs_data_set_int   (f, "size",  (int64_t)font_size);
     obs_data_set_int   (f, "flags", bold ? 1 : 0);
     obs_data_set_obj   (s, "font",  f);
@@ -180,6 +180,49 @@ void broadcast_destroy_text_src(obs_source_t **src_ptr)
     if (!src_ptr || !*src_ptr) return;
     obs_source_release(*src_ptr);
     *src_ptr = NULL;
+}
+
+/* ============================================================================
+ * broadcast_update_text_src_cached
+ * ============================================================================
+ * Versão cacheada de broadcast_update_text_src.
+ *
+ * Problema original: broadcast_update era chamado a cada tick/update mesmo
+ * sem o texto mudar, forçando a child source a recriar a textura de GPU a
+ * cada frame — causando o flickering visível no nome centralizado.
+ *
+ * Solução: compara o estado atual com o cache antes de chamar
+ * obs_source_update(). Se nada mudou, não faz nada — zero alocações,
+ * zero recriação de textura por frame.
+ */
+void broadcast_update_text_src_cached(obs_source_t **src_ptr,
+                                       TextCache     *cache,
+                                       const char    *text,
+                                       uint32_t       argb_color,
+                                       int            font_size,
+                                       bool           bold)
+{
+    if (!src_ptr || !cache) return;
+
+    const char *safe_text = text ? text : "";
+    bool changed = cache->dirty
+        || cache->color     != argb_color
+        || cache->font_size != font_size
+        || cache->bold      != bold
+        || strncmp(cache->text, safe_text, TEXT_CACHE_STR_MAX - 1) != 0;
+
+    if (!changed) return; /* nothing to do — no GPU work, no flicker */
+
+    /* Atualiza cache */
+    strncpy(cache->text, safe_text, TEXT_CACHE_STR_MAX - 1);
+    cache->text[TEXT_CACHE_STR_MAX - 1] = '\0';
+    cache->color     = argb_color;
+    cache->font_size = font_size;
+    cache->bold      = bold;
+    cache->dirty     = false;
+
+    /* Cria ou atualiza a source */
+    broadcast_update_text_src(src_ptr, safe_text, argb_color, font_size, bold);
 }
 
 /* ============================================================================
@@ -220,10 +263,13 @@ void *broadcast_create(obs_data_t *settings, obs_source_t *source)
     ctx->gc_font_size = 72;
 
     /* Ticker */
-    ctx->ticker_text    = bstrdup("");
-    ctx->ticker_enabled = false;
-    ctx->ticker_speed   = TICKER_DEFAULT_SPEED;
-    ctx->ticker_offset  = 0.0f;
+    ctx->ticker_text      = bstrdup("");
+    ctx->ticker_enabled   = false;
+    ctx->ticker_speed     = TICKER_DEFAULT_SPEED;
+    ctx->ticker_offset    = 0.0f;
+    ctx->ticker_height    = (float)TICKER_BAR_HEIGHT;
+    ctx->ticker_font_size = 24;
+    ctx->ticker_padding   = 50.0f;
 
     /* Social */
     ctx->social_enabled  = false;
@@ -232,6 +278,12 @@ void *broadcast_create(obs_data_t *settings, obs_source_t *source)
     ctx->tiktok          = bstrdup("");
     ctx->facebook        = bstrdup("");
     ctx->youtube         = bstrdup("");
+
+    /* Carousel */
+    ctx->social_carousel_index    = 0;
+    ctx->social_carousel_timer    = 0.0f;
+    ctx->social_carousel_paused   = false;
+    ctx->social_carousel_interval = SOCIAL_CAROUSEL_INTERVAL;
 
     /* Opacidade */
     ctx->opacity_global = 1.0f;
@@ -246,9 +298,18 @@ void *broadcast_create(obs_data_t *settings, obs_source_t *source)
     ctx->color_accent    = COLOR_ACCENT;
     ctx->color_bg        = COLOR_BG;
 
+    /* Tema / branding */
+    ctx->color_accent2  = 0xFF4FC3F7;  /* azul-gelo padrão */
+    ctx->bg_opacity     = 0.85f;
+    ctx->glow_strength  = 0.4f;
+
     /* Dimensões */
     ctx->width  = DEFAULT_SOURCE_WIDTH;
     ctx->height = DEFAULT_SOURCE_HEIGHT;
+
+    /* Escala responsiva (calculada no primeiro render) */
+    ctx->scale_x = 1.0f;
+    ctx->scale_y = 1.0f;
 
     /* Animacao */
     ctx->elapsed         = 0.0f;
@@ -290,6 +351,16 @@ void *broadcast_create(obs_data_t *settings, obs_source_t *source)
     for (int i = 0; i < 4; i++) {
         ctx->ts_social_tag[i]    = NULL;
         ctx->ts_social_handle[i] = NULL;
+    }
+
+    /* Text caches — marcados dirty para forçar criação inicial */
+    ctx->tc_lt_name.dirty  = true;
+    ctx->tc_lt_title.dirty = true;
+    ctx->tc_gc.dirty       = true;
+    ctx->tc_ticker.dirty   = true;
+    for (int i = 0; i < 4; i++) {
+        ctx->tc_social_tag[i].dirty    = true;
+        ctx->tc_social_handle[i].dirty = true;
     }
 
     /* Carrega os shaders */
@@ -411,6 +482,8 @@ void broadcast_process_ws_commands(void *data)
         obs_data_set_string(settings, "social_tiktok",    ctx->tiktok    ? ctx->tiktok    : "");
         obs_data_set_string(settings, "social_facebook",  ctx->facebook  ? ctx->facebook  : "");
         obs_data_set_string(settings, "social_youtube",   ctx->youtube   ? ctx->youtube   : "");
+        obs_data_set_bool  (settings, "social_carousel_paused",   ctx->social_carousel_paused);
+        obs_data_set_double(settings, "social_carousel_interval", (double)ctx->social_carousel_interval);
 
         /* Aplica alterações baseadas no tipo de comando */
         if (cmd.type == "lower_third") {
@@ -457,6 +530,17 @@ void broadcast_process_ws_commands(void *data)
                 obs_data_set_bool(settings, "social_enabled", obs_data_get_bool(cmd_data, "enabled"));
             if (obs_data_has_user_value(cmd_data, "position"))
                 obs_data_set_int(settings, "social_position", obs_data_get_int(cmd_data, "position"));
+            needs_update = true;
+
+        } else if (cmd.type == "social_carousel") {
+            if (obs_data_has_user_value(cmd_data, "pause"))
+                obs_data_set_bool(settings, "social_carousel_paused", obs_data_get_bool(cmd_data, "pause"));
+            if (obs_data_has_user_value(cmd_data, "interval"))
+                obs_data_set_double(settings, "social_carousel_interval", obs_data_get_double(cmd_data, "interval"));
+            if (obs_data_has_user_value(cmd_data, "next"))
+                obs_data_set_int(settings, "social_carousel_force_next", 1);
+            if (obs_data_has_user_value(cmd_data, "index"))
+                obs_data_set_int(settings, "social_carousel_force_index", obs_data_get_int(cmd_data, "index"));
             needs_update = true;
 
         } else if (cmd.type == "opacity") {
@@ -568,6 +652,14 @@ void broadcast_update(void *data, obs_data_t *settings)
     ctx->ticker_enabled = obs_data_get_bool  (settings, "ticker_enabled");
     ctx->ticker_speed   = (float)obs_data_get_double(settings, "ticker_speed");
 
+    /* Novas propriedades de ticker */
+    float new_th = (float)obs_data_get_double(settings, "ticker_height");
+    ctx->ticker_height    = (new_th  > 0.0f) ? new_th  : (float)TICKER_BAR_HEIGHT;
+    int new_tfs = (int)obs_data_get_int(settings, "ticker_font_size");
+    ctx->ticker_font_size = (new_tfs > 0)    ? new_tfs : 24;
+    float new_tp = (float)obs_data_get_double(settings, "ticker_padding");
+    ctx->ticker_padding   = (new_tp  > 0.0f) ? new_tp  : 50.0f;
+
     /* ── REDES SOCIAIS ─────────────────────────────────────────────────── */
     ctx->social_enabled  = obs_data_get_bool(settings, "social_enabled");
     ctx->social_position = (int)obs_data_get_int(settings, "social_position");
@@ -633,11 +725,53 @@ void broadcast_update(void *data, obs_data_t *settings)
         ctx->gc_anim_state    = 1;
     }
 
+    /* ── CAROUSEL SOCIAL CONTROL ─────────────────────────────────────────── */
+    ctx->social_carousel_paused   = obs_data_get_bool(settings, "social_carousel_paused");
+    float new_carousel_interval = (float)obs_data_get_double(settings, "social_carousel_interval");
+    if (new_carousel_interval > 0.0f)
+        ctx->social_carousel_interval = new_carousel_interval;
+
+    /* Force next social (via WebSocket) */
+    if (obs_data_has_user_value(settings, "social_carousel_force_next")) {
+        const char *handles[4] = {
+            ctx->instagram, ctx->tiktok, ctx->facebook, ctx->youtube
+        };
+        int attempts = 0;
+        do {
+            ctx->social_carousel_index = (ctx->social_carousel_index + 1) % 4;
+            attempts++;
+        } while (attempts < 4 &&
+                 (!handles[ctx->social_carousel_index] ||
+                  strlen(handles[ctx->social_carousel_index]) == 0));
+        ctx->social_carousel_timer = 0.0f;
+    }
+
+    /* Force specific index (via WebSocket) */
+    if (obs_data_has_user_value(settings, "social_carousel_force_index")) {
+        int fi = (int)obs_data_get_int(settings, "social_carousel_force_index");
+        if (fi >= 0 && fi < 4) {
+            const char *handles[4] = {
+                ctx->instagram, ctx->tiktok, ctx->facebook, ctx->youtube
+            };
+            if (handles[fi] && strlen(handles[fi]) > 0) {
+                ctx->social_carousel_index = fi;
+                ctx->social_carousel_timer = 0.0f;
+            }
+        }
+    }
+
     /* ── CORES ──────────────────────────────────────────────────────────── */
     ctx->color_primary   = (uint32_t)obs_data_get_int(settings, "color_primary");
     ctx->color_secondary = (uint32_t)obs_data_get_int(settings, "color_secondary");
     ctx->color_accent    = (uint32_t)obs_data_get_int(settings, "color_accent");
     ctx->color_bg        = (uint32_t)obs_data_get_int(settings, "color_bg");
+
+    /* Tema */
+    ctx->color_accent2 = (uint32_t)obs_data_get_int(settings, "color_accent2");
+    if (ctx->color_accent2 == 0) ctx->color_accent2 = 0xFF4FC3F7;
+    ctx->bg_opacity    = (float)obs_data_get_double(settings, "bg_opacity");
+    if (ctx->bg_opacity <= 0.0f) ctx->bg_opacity = 0.85f;
+    ctx->glow_strength = (float)obs_data_get_double(settings, "glow_strength");
 
     /* ── DIMENSÕES ──────────────────────────────────────────────────────── */
     ctx->width  = (uint32_t)obs_data_get_int(settings, "source_width");
@@ -673,18 +807,23 @@ void broadcast_update(void *data, obs_data_t *settings)
         }
     }
 
-    /* ── ACTUALIZA CHILD TEXT SOURCES ────────────────────────────────────
+    /* ── ACTUALIZA CHILD TEXT SOURCES (cached — sem recriar textura) ──────
      *
-     * Chamado no thread principal (video_tick / properties callback).
-     * As sources são criadas aqui e renderizadas em broadcast_video_render.
+     * broadcast_update_text_src_cached() compara o conteúdo actual com o
+     * cache antes de chamar obs_source_update(). Se nada mudou, não faz
+     * nada — zero alocações, zero recriação de textura, sem flickering.
      */
 
-    /* Lower Third */
-    broadcast_update_text_src(&ctx->ts_lt_name,  ctx->lt_name,  ctx->color_accent, 36, true);
-    broadcast_update_text_src(&ctx->ts_lt_title, ctx->lt_title, ctx->color_accent, 24, false);
+    /* Lower Third — fonte 20px bold (nome) + 14px regular (cargo) = HTML */
+    broadcast_update_text_src_cached(&ctx->ts_lt_name,  &ctx->tc_lt_name,
+                                      ctx->lt_name,  ctx->color_accent, 20, true);
+    broadcast_update_text_src_cached(&ctx->ts_lt_title, &ctx->tc_lt_title,
+                                      ctx->lt_title, ctx->color_accent, 14, false);
 
     /* Ticker */
-    broadcast_update_text_src(&ctx->ts_ticker, ctx->ticker_text, ctx->color_accent, 24, false);
+    broadcast_update_text_src_cached(&ctx->ts_ticker, &ctx->tc_ticker,
+                                      ctx->ticker_text, ctx->color_accent,
+                                      ctx->ticker_font_size, false);
 
     /* GC — calcula tamanho de fonte óptimo baseado no comprimento do texto */
     {
@@ -695,7 +834,8 @@ void broadcast_update(void *data, obs_data_t *settings)
         else if (len < 100) gc_fs = 36;
         else                gc_fs = 28;
         ctx->gc_font_size = gc_fs;
-        broadcast_update_text_src(&ctx->ts_gc, ctx->gc_text, ctx->color_accent, gc_fs, true);
+        broadcast_update_text_src_cached(&ctx->ts_gc, &ctx->tc_gc,
+                                          ctx->gc_text, ctx->color_accent, gc_fs, true);
     }
 
     /* Social — tags fixas, cor do primário; handles em cor do accent */
@@ -706,8 +846,10 @@ void broadcast_update(void *data, obs_data_t *settings)
         ctx->youtube   ? ctx->youtube   : ""
     };
     for (int i = 0; i < 4; i++) {
-        broadcast_update_text_src(&ctx->ts_social_tag[i],    SOCIAL_TAGS[i],  ctx->color_primary, 14, true);
-        broadcast_update_text_src(&ctx->ts_social_handle[i], handles[i],      ctx->color_accent,  20, false);
+        broadcast_update_text_src_cached(&ctx->ts_social_tag[i],    &ctx->tc_social_tag[i],
+                                          SOCIAL_TAGS[i],  ctx->color_primary, 14, true);
+        broadcast_update_text_src_cached(&ctx->ts_social_handle[i], &ctx->tc_social_handle[i],
+                                          handles[i],      ctx->color_accent,  20, false);
     }
 
     /* Reinicia animacao do Lower Third apenas se o conteudo mudou */
@@ -799,6 +941,9 @@ void broadcast_get_defaults(obs_data_t *settings)
     obs_data_set_default_string(settings, "ticker_text",    "Notícia em destaque | Broadcast Overlay | OBS Studio");
     obs_data_set_default_bool  (settings, "ticker_enabled", false);
     obs_data_set_default_double(settings, "ticker_speed",   TICKER_DEFAULT_SPEED);
+    obs_data_set_default_double(settings, "ticker_height",  (double)TICKER_BAR_HEIGHT);
+    obs_data_set_default_int   (settings, "ticker_font_size", 24);
+    obs_data_set_default_double(settings, "ticker_padding", 50.0);
 
     obs_data_set_default_bool  (settings, "social_enabled",   false);
     obs_data_set_default_int   (settings, "social_position",  SOCIAL_BOTTOM_RIGHT);
@@ -806,11 +951,18 @@ void broadcast_get_defaults(obs_data_t *settings)
     obs_data_set_default_string(settings, "social_tiktok",    "@tiktok");
     obs_data_set_default_string(settings, "social_facebook",  "@facebook");
     obs_data_set_default_string(settings, "social_youtube",   "@youtube");
+    obs_data_set_default_bool  (settings, "social_carousel_paused",   false);
+    obs_data_set_default_double(settings, "social_carousel_interval", (double)SOCIAL_CAROUSEL_INTERVAL);
 
     obs_data_set_default_int(settings, "color_primary",   (int64_t)COLOR_PRIMARY);
     obs_data_set_default_int(settings, "color_secondary", (int64_t)COLOR_SECONDARY);
     obs_data_set_default_int(settings, "color_accent",    (int64_t)COLOR_ACCENT);
     obs_data_set_default_int(settings, "color_bg",        (int64_t)COLOR_BG);
+
+    /* Tema */
+    obs_data_set_default_int   (settings, "color_accent2",   (int64_t)0xFF4FC3F7);
+    obs_data_set_default_double(settings, "bg_opacity",      0.85);
+    obs_data_set_default_double(settings, "glow_strength",   0.4);
 
     obs_data_set_default_double(settings, "opacity_global", 1.0);
     obs_data_set_default_double(settings, "opacity_lt",     1.0);
@@ -913,6 +1065,28 @@ void broadcast_video_tick(void *data, float seconds)
             ctx->ticker_offset = 0.0f;
         }
     }
+
+    /* Carrossel social — respeita pausa e intervalo configurável */
+    if (ctx->social_enabled && !ctx->social_carousel_paused) {
+        ctx->social_carousel_timer += seconds;
+        float interval = ctx->social_carousel_interval > 0.0f
+                         ? ctx->social_carousel_interval
+                         : SOCIAL_CAROUSEL_INTERVAL;
+        if (ctx->social_carousel_timer >= interval) {
+            ctx->social_carousel_timer = 0.0f;
+            /* Encontra o proximo handle nao vazio */
+            const char *handles[4] = {
+                ctx->instagram, ctx->tiktok, ctx->facebook, ctx->youtube
+            };
+            int attempts = 0;
+            do {
+                ctx->social_carousel_index = (ctx->social_carousel_index + 1) % 4;
+                attempts++;
+            } while (attempts < 4 &&
+                     (!handles[ctx->social_carousel_index] ||
+                      strlen(handles[ctx->social_carousel_index]) == 0));
+        }
+    }
 }
 
 /* ============================================================================
@@ -924,14 +1098,22 @@ void broadcast_video_render(void *data, gs_effect_t *effect)
 
     auto *ctx = (BroadcastContext *)data;
 
+    /* ── Calcula escala responsiva ────────────────────────────────────────
+     * Todos os elementos de UI usam coordenadas em espaço 1920×1080.
+     * A matriz de escala abaixo mapeia essas coordenadas para a resolução
+     * configurada pelo utilizador (720p, 1440p, 4K, ultrawide, vertical).
+     * Os próprios render_* não precisam de saber a resolução real —
+     * trabalham sempre em 1920×1080 e a GPU escala para eles.
+     */
+    ctx->scale_x = (float)ctx->width  / (float)DEFAULT_SOURCE_WIDTH;
+    ctx->scale_y = (float)ctx->height / (float)DEFAULT_SOURCE_HEIGHT;
+
     gs_matrix_push();
-    gs_matrix_scale3f((float)ctx->width  / (float)DEFAULT_SOURCE_WIDTH,
-                      (float)ctx->height / (float)DEFAULT_SOURCE_HEIGHT,
-                      1.0f);
+    gs_matrix_scale3f(ctx->scale_x, ctx->scale_y, 1.0f);
 
     if (ctx->gc_enabled)                              render_gc(ctx);
     if (ctx->lt_enabled && ctx->lt_is_visible)        render_lower_third(ctx);
-    if (ctx->social_enabled)                          render_social_media(ctx);
+    if (ctx->social_enabled)                          render_social_carousel(ctx);
     if (ctx->ticker_enabled)                          render_ticker(ctx);
 
     gs_matrix_pop();

@@ -43,6 +43,16 @@ obs_properties_t *broadcast_get_properties(void *data)
     obs_properties_add_color(general_group, "color_bg",
                              obs_module_text("BroadcastOverly.ColorBg"));
 
+    /* ── TEMA / BRANDING ────────────────────────────────────────────── */
+    obs_properties_add_color(general_group, "color_accent2",
+                             obs_module_text("BroadcastOverly.ColorAccent2"));
+    obs_properties_add_float_slider(general_group, "bg_opacity",
+                                    obs_module_text("BroadcastOverly.BgOpacity"),
+                                    0.1f, 1.0f, 0.05f);
+    obs_properties_add_float_slider(general_group, "glow_strength",
+                                    obs_module_text("BroadcastOverly.GlowStrength"),
+                                    0.0f, 1.0f, 0.05f);
+
     /* ══════════════════════════════════════════════════════════════════════ */
     /* SEÇÃO: LOWER THIRD                                                    */
     /* ══════════════════════════════════════════════════════════════════════ */
@@ -101,6 +111,15 @@ obs_properties_t *broadcast_get_properties(void *data)
     obs_properties_add_float_slider(ticker_group, "ticker_speed",
                                     obs_module_text("BroadcastOverly.TickerSpeed"),
                                     10.0f, 400.0f, 5.0f);
+    obs_properties_add_float_slider(ticker_group, "ticker_height",
+                                    obs_module_text("BroadcastOverly.TickerHeight"),
+                                    20.0f, 120.0f, 2.0f);
+    obs_properties_add_int(ticker_group, "ticker_font_size",
+                           obs_module_text("BroadcastOverly.TickerFontSize"),
+                           12, 72, 1);
+    obs_properties_add_float_slider(ticker_group, "ticker_padding",
+                                    obs_module_text("BroadcastOverly.TickerPadding"),
+                                    10.0f, 200.0f, 5.0f);
 
     /* ══════════════════════════════════════════════════════════════════════ */
     /* SEÇÃO: REDES SOCIAIS                                                  */
