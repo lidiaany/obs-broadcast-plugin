@@ -950,15 +950,14 @@ struct obs_source_info broadcast_overlay_source_info = {
     .create       = broadcast_create,
     .destroy      = broadcast_destroy,
 
+    .get_width  = broadcast_get_width,
+    .get_height = broadcast_get_height,
+
     .get_defaults  = broadcast_get_defaults,
     .get_properties = broadcast_get_properties,
     .update        = broadcast_update,
 
     .video_tick   = broadcast_video_tick,
-
-    .get_width  = broadcast_get_width,
-    .get_height = broadcast_get_height,
-
     .video_render = broadcast_video_render,
 
     .icon_type = OBS_ICON_TYPE_CUSTOM,
