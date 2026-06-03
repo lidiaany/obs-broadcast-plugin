@@ -233,6 +233,13 @@ void *broadcast_create(obs_data_t *settings, obs_source_t *source)
     ctx->facebook        = bstrdup("");
     ctx->youtube         = bstrdup("");
 
+    /* Opacidade */
+    ctx->opacity_global = 1.0f;
+    ctx->opacity_lt     = 1.0f;
+    ctx->opacity_gc     = 1.0f;
+    ctx->opacity_ticker = 1.0f;
+    ctx->opacity_social = 1.0f;
+
     /* Cores */
     ctx->color_primary   = COLOR_PRIMARY;
     ctx->color_secondary = COLOR_SECONDARY;
@@ -243,9 +250,16 @@ void *broadcast_create(obs_data_t *settings, obs_source_t *source)
     ctx->width  = DEFAULT_SOURCE_WIDTH;
     ctx->height = DEFAULT_SOURCE_HEIGHT;
 
-    /* Animação */
-    ctx->elapsed        = 0.0f;
-    ctx->lt_visible_time = 0.0f;
+    /* Animacao */
+    ctx->elapsed         = 0.0f;
+    ctx->lt_visible_time  = 0.0f;
+
+    /* Animacao GC */
+    ctx->gc_anim_progress = 0.0f;
+    ctx->gc_anim_state    = 0;
+    ctx->gc_anim_type     = bstrdup("fade");
+    ctx->gc_anim_dir      = bstrdup("up");
+    ctx->gc_anim_duration = GC_ANIM_DURATION;
 
     /* WebSocket */
     ctx->ws_server  = NULL;
@@ -314,6 +328,8 @@ void broadcast_destroy(void *data)
     bfree_safe(ctx->tiktok);
     bfree_safe(ctx->facebook);
     bfree_safe(ctx->youtube);
+    bfree_safe(ctx->gc_anim_type);
+    bfree_safe(ctx->gc_anim_dir);
 
     /* Libera child text sources */
     broadcast_destroy_text_src(&ctx->ts_lt_name);
@@ -368,6 +384,16 @@ void broadcast_process_ws_commands(void *data)
         obs_data_set_bool  (settings, "ticker_enabled", ctx->ticker_enabled);
         obs_data_set_double(settings, "ticker_speed",   (double)ctx->ticker_speed);
 
+        obs_data_set_double(settings, "opacity_global", (double)ctx->opacity_global);
+        obs_data_set_double(settings, "opacity_lt",     (double)ctx->opacity_lt);
+        obs_data_set_double(settings, "opacity_gc",     (double)ctx->opacity_gc);
+        obs_data_set_double(settings, "opacity_ticker", (double)ctx->opacity_ticker);
+        obs_data_set_double(settings, "opacity_social", (double)ctx->opacity_social);
+
+        obs_data_set_string(settings, "gc_anim_type", ctx->gc_anim_type ? ctx->gc_anim_type : "fade");
+        obs_data_set_string(settings, "gc_anim_dir",  ctx->gc_anim_dir  ? ctx->gc_anim_dir  : "up");
+        obs_data_set_double(settings, "gc_anim_duration", (double)ctx->gc_anim_duration);
+
         obs_data_set_bool(settings, "social_enabled",  ctx->social_enabled);
         obs_data_set_int (settings, "social_position", (int64_t)ctx->social_position);
         obs_data_set_string(settings, "social_instagram", ctx->instagram ? ctx->instagram : "");
@@ -416,6 +442,36 @@ void broadcast_process_ws_commands(void *data)
                 obs_data_set_bool(settings, "social_enabled", obs_data_get_bool(cmd_data, "enabled"));
             if (obs_data_has_user_value(cmd_data, "position"))
                 obs_data_set_int(settings, "social_position", obs_data_get_int(cmd_data, "position"));
+            needs_update = true;
+
+        } else if (cmd.type == "opacity") {
+            if (obs_data_has_user_value(cmd_data, "global"))
+                obs_data_set_double(settings, "opacity_global", obs_data_get_double(cmd_data, "global"));
+            if (obs_data_has_user_value(cmd_data, "lower_third"))
+                obs_data_set_double(settings, "opacity_lt", obs_data_get_double(cmd_data, "lower_third"));
+            if (obs_data_has_user_value(cmd_data, "gc"))
+                obs_data_set_double(settings, "opacity_gc", obs_data_get_double(cmd_data, "gc"));
+            if (obs_data_has_user_value(cmd_data, "ticker"))
+                obs_data_set_double(settings, "opacity_ticker", obs_data_get_double(cmd_data, "ticker"));
+            if (obs_data_has_user_value(cmd_data, "social"))
+                obs_data_set_double(settings, "opacity_social", obs_data_get_double(cmd_data, "social"));
+            needs_update = true;
+
+        } else if (cmd.type == "animate") {
+            const char *target = obs_data_get_string(cmd_data, "target");
+            if (target && *target) {
+                if (strcmp(target, "gc") == 0) {
+                    const char *anim_type = obs_data_get_string(cmd_data, "animation");
+                    if (anim_type && *anim_type)
+                        obs_data_set_string(settings, "gc_anim_type", anim_type);
+                    if (obs_data_has_user_value(cmd_data, "duration"))
+                        obs_data_set_double(settings, "gc_anim_duration", obs_data_get_double(cmd_data, "duration"));
+                    if (obs_data_has_user_value(cmd_data, "direction"))
+                        obs_data_set_string(settings, "gc_anim_dir", obs_data_get_string(cmd_data, "direction"));
+                    /* Forca o inicio da animacao */
+                    obs_data_set_int(settings, "gc_anim_trigger", 1);
+                }
+            }
             needs_update = true;
         }
 
@@ -503,6 +559,33 @@ void broadcast_update(void *data, obs_data_t *settings)
 
     const char *new_yt = obs_data_get_string(settings, "social_youtube");
     if (new_yt && *new_yt) { bfree_safe(ctx->youtube);   ctx->youtube   = bstrdup(new_yt); }
+
+    /* ── OPACIDADE ──────────────────────────────────────────────────────── */
+    ctx->opacity_global = (float)obs_data_get_double(settings, "opacity_global");
+    ctx->opacity_lt     = (float)obs_data_get_double(settings, "opacity_lt");
+    ctx->opacity_gc     = (float)obs_data_get_double(settings, "opacity_gc");
+    ctx->opacity_ticker = (float)obs_data_get_double(settings, "opacity_ticker");
+    ctx->opacity_social = (float)obs_data_get_double(settings, "opacity_social");
+
+    /* ── ANIMACAO GC ────────────────────────────────────────────────────── */
+    const char *new_gc_anim_type = obs_data_get_string(settings, "gc_anim_type");
+    if (new_gc_anim_type && *new_gc_anim_type) {
+        bfree_safe(ctx->gc_anim_type);
+        ctx->gc_anim_type = bstrdup(new_gc_anim_type);
+    }
+    const char *new_gc_anim_dir = obs_data_get_string(settings, "gc_anim_dir");
+    if (new_gc_anim_dir && *new_gc_anim_dir) {
+        bfree_safe(ctx->gc_anim_dir);
+        ctx->gc_anim_dir = bstrdup(new_gc_anim_dir);
+    }
+    ctx->gc_anim_duration = (float)obs_data_get_double(settings, "gc_anim_duration");
+    if (ctx->gc_anim_duration <= 0.0f) ctx->gc_anim_duration = GC_ANIM_DURATION;
+
+    /* Dispara animacao se solicitado via WebSocket */
+    if (obs_data_has_user_value(settings, "gc_anim_trigger")) {
+        ctx->gc_anim_progress = 0.0f;
+        ctx->gc_anim_state    = 1;
+    }
 
     /* ── CORES ──────────────────────────────────────────────────────────── */
     ctx->color_primary   = (uint32_t)obs_data_get_int(settings, "color_primary");
@@ -683,6 +766,16 @@ void broadcast_get_defaults(obs_data_t *settings)
     obs_data_set_default_int(settings, "color_accent",    (int64_t)COLOR_ACCENT);
     obs_data_set_default_int(settings, "color_bg",        (int64_t)COLOR_BG);
 
+    obs_data_set_default_double(settings, "opacity_global", 1.0);
+    obs_data_set_default_double(settings, "opacity_lt",     1.0);
+    obs_data_set_default_double(settings, "opacity_gc",     1.0);
+    obs_data_set_default_double(settings, "opacity_ticker", 1.0);
+    obs_data_set_default_double(settings, "opacity_social", 1.0);
+
+    obs_data_set_default_string(settings, "gc_anim_type", "fade");
+    obs_data_set_default_string(settings, "gc_anim_dir",  "up");
+    obs_data_set_default_double(settings, "gc_anim_duration", (double)GC_ANIM_DURATION);
+
     obs_data_set_default_int(settings, "source_width",  (int64_t)DEFAULT_SOURCE_WIDTH);
     obs_data_set_default_int(settings, "source_height", (int64_t)DEFAULT_SOURCE_HEIGHT);
 
@@ -745,6 +838,21 @@ void broadcast_video_tick(void *data, float seconds)
         }
     } else {
         ctx->lt_is_visible = false;
+    }
+
+    /* Animacao do GC */
+    if (ctx->gc_anim_state > 0) {
+        ctx->gc_anim_progress += seconds / ctx->gc_anim_duration;
+        if (ctx->gc_anim_progress >= 1.0f) {
+            ctx->gc_anim_progress = 1.0f;
+            ctx->gc_anim_state    = 0;
+        }
+    } else if (ctx->gc_anim_state < 0) {
+        ctx->gc_anim_progress -= seconds / ctx->gc_anim_duration;
+        if (ctx->gc_anim_progress <= 0.0f) {
+            ctx->gc_anim_progress = 0.0f;
+            ctx->gc_anim_state    = 0;
+        }
     }
 
     /* Ticker offset */

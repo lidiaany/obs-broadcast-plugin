@@ -93,6 +93,16 @@ static float get_src_height(obs_source_t *src, int font_size)
     return (float)font_size * 1.2f;
 }
 
+/* Aplica opacidade (0.0-1.0) a uma cor ARGB. */
+static uint32_t apply_opacity(uint32_t color, float mult)
+{
+    if (mult >= 1.0f) return color;
+    if (mult <= 0.0f) return 0;
+    uint32_t a = (uint32_t)((float)GET_ALPHA(color) * mult);
+    return (a << 24) | (GET_RED(color) << 16)
+         | (GET_GREEN(color) << 8) | GET_BLUE(color);
+}
+
 /* ============================================================================
  * draw_rect
  * ============================================================================
@@ -257,7 +267,7 @@ void draw_rect_glass(BroadcastContext *ctx, float x, float y,
  * LOWER THIRD
  * ============================================================================
  * Barra semi-transparente na parte inferior com nome (bold 36pt) e
- * cargo (regular 24pt). Animação: slide entrada/saída + fade para centro.
+ * cargo (regular 24pt). Animacao: slide entrada/saida + fade para centro.
  */
 void render_lower_third(BroadcastContext *ctx)
 {
@@ -298,10 +308,13 @@ void render_lower_third(BroadcastContext *ctx)
         default:              bgx = (W - bgw) * 0.5f;   break;
     }
 
-    /* Aplica alpha da animação à cor de fundo */
+    float lt_opacity = ctx->opacity_global * ctx->opacity_lt;
+
+    /* Aplica alpha da animacao + opacidade a cor de fundo */
     uint32_t bg_color = ctx->color_bg;
-    if (alpha_mult < 1.0f) {
-        uint32_t a = (uint32_t)((float)GET_ALPHA(bg_color) * alpha_mult);
+    float total_alpha_mult = alpha_mult * lt_opacity;
+    if (total_alpha_mult < 1.0f) {
+        uint32_t a = (uint32_t)((float)GET_ALPHA(bg_color) * total_alpha_mult);
         bg_color = (a << 24) | (GET_RED(bg_color) << 16)
                  | (GET_GREEN(bg_color) << 8) | GET_BLUE(bg_color);
     }
@@ -309,7 +322,8 @@ void render_lower_third(BroadcastContext *ctx)
     /* Fundo glass */
     draw_rect_glass(ctx, bgx, y_base, bgw, bar_h, bg_color, true);
     /* Barra lateral colorida */
-    draw_rect(bgx, y_base, side_w, bar_h, ctx->color_primary);
+    uint32_t bar_color = apply_opacity(ctx->color_primary, lt_opacity);
+    draw_rect(bgx, y_base, side_w, bar_h, bar_color);
 
     /* Texto: nome (bold) */
     draw_text_source(ctx->ts_lt_name, bgx + tx_off, y_base + 20.0f);
@@ -324,6 +338,11 @@ void render_lower_third(BroadcastContext *ctx)
  * ============================================================================
  * Texto dinâmico centralizado. Tamanho de fonte ajustado ao comprimento
  * do texto em broadcast_update() e guardado em ctx->gc_font_size.
+ *
+ * Animacoes suportadas (via WebSocket "animate"):
+ *   - fade:  opacidade de 0 a 1
+ *   - scale: escala de 0.3 a 1.0
+ *   - slide: desliza de fora da tela ate a posicao central
  */
 void render_gc(BroadcastContext *ctx)
 {
@@ -336,19 +355,56 @@ void render_gc(BroadcastContext *ctx)
     float tw = get_src_width (ctx->ts_gc, ctx->gc_text, fs);
     float th = get_src_height(ctx->ts_gc, fs);
 
-    float x  = (W - tw) * 0.5f;
-    float y  = (H - th) * 0.5f;
+    float cx = (W - tw) * 0.5f;
+    float cy = (H - th) * 0.5f;
     float bp = 30.0f;
 
-    draw_rect(x - bp, y - bp, tw + bp * 2.0f, th + bp * 2.0f, ctx->color_bg);
-    draw_text_source(ctx->ts_gc, x, y);
+    /* Calcula progresso de animacao */
+    float anim_progress = ease_out_cubic(ctx->gc_anim_progress);
+    bool gc_anim_active = (ctx->gc_anim_state != 0 || ctx->gc_anim_progress > 0.0f);
+    const char *gc_type = gc_anim_active ? (ctx->gc_anim_type ? ctx->gc_anim_type : "fade") : "";
+
+    gs_matrix_push();
+
+    /* Aplica transformacoes de animacao (scale / slide) */
+    if (gc_anim_active) {
+        if (strcmp(gc_type, "scale") == 0) {
+            float s = 0.3f + 0.7f * anim_progress;
+            gs_matrix_translate3f(cx + tw * 0.5f, cy + th * 0.5f, 0.0f);
+            gs_matrix_scale3f(s, s, 1.0f);
+            gs_matrix_translate3f(-(cx + tw * 0.5f), -(cy + th * 0.5f), 0.0f);
+        } else if (strcmp(gc_type, "slide") == 0) {
+            float slide_dist = 200.0f * (1.0f - anim_progress);
+            const char *dir = ctx->gc_anim_dir ? ctx->gc_anim_dir : "up";
+            float sx = 0.0f, sy = 0.0f;
+            if (strcmp(dir, "up") == 0)        sy =  slide_dist;
+            else if (strcmp(dir, "down") == 0)  sy = -slide_dist;
+            else if (strcmp(dir, "left") == 0)  sx =  slide_dist;
+            else if (strcmp(dir, "right") == 0) sx = -slide_dist;
+            gs_matrix_translate3f(sx, sy, 0.0f);
+        }
+        /* fade nao requer transform — aplicado via alpha abaixo */
+    }
+
+    /* Aplica opacidade global + do GC + fade animation */
+    float gc_opacity = ctx->opacity_global * ctx->opacity_gc;
+    if (gc_anim_active && strcmp(gc_type, "fade") == 0) {
+        float fade_alpha = (anim_progress < 0.01f) ? 0.0f : anim_progress;
+        gc_opacity *= fade_alpha;
+    }
+    uint32_t bg_color = apply_opacity(ctx->color_bg, gc_opacity);
+
+    draw_rect(cx - bp, cy - bp, tw + bp * 2.0f, th + bp * 2.0f, bg_color);
+    draw_text_source(ctx->ts_gc, cx, cy);
+
+    gs_matrix_pop();
 }
 
 /* ============================================================================
- * TICKER (RODAPÉ)
+ * TICKER (RODAPE)
  * ============================================================================
  * Texto corrido estilo news ticker com loop infinito.
- * O texto é renderizado até 3 vezes por frame para cobrir o wrap.
+ * O texto e renderizado ate 3 vezes por frame para cobrir o wrap.
  */
 void render_ticker(BroadcastContext *ctx)
 {
@@ -364,23 +420,27 @@ void render_ticker(BroadcastContext *ctx)
     float uw  = tw + pad;
     float off = (uw > 0.0f) ? fmodf(ctx->ticker_offset, uw) : 0.0f;
 
+    float tk_opacity = ctx->opacity_global * ctx->opacity_ticker;
+    uint32_t ticker_bg = apply_opacity(COLOR_TICKER_BG, tk_opacity);
+    uint32_t line_color = apply_opacity(ctx->color_primary, tk_opacity);
+
     /* Barra de fundo + linha de cor */
-    draw_rect(0.0f, H - bh, W, bh, COLOR_TICKER_BG);
-    draw_rect(0.0f, H - bh, W, 3.0f, ctx->color_primary);
+    draw_rect(0.0f, H - bh, W, bh, ticker_bg);
+    draw_rect(0.0f, H - bh, W, 3.0f, line_color);
 
     float th = get_src_height(ctx->ts_ticker, fs);
     float yt = H - bh + (bh - th) * 0.5f;
 
-    /* Primeira instância (posição actual) */
+    /* Primeira instancia (posicao actual) */
     float x1 = W - off;
     draw_text_source(ctx->ts_ticker, x1, yt);
 
-    /* Segunda instância (imediatamente à esquerda — wrap) */
+    /* Segunda instancia (imediatamente a esquerda — wrap) */
     float x2 = x1 - uw;
     if (x2 + tw > 0.0f)
         draw_text_source(ctx->ts_ticker, x2, yt);
 
-    /* Terceira instância (imediatamente à direita — fill) */
+    /* Terceira instancia (imediatamente a direita — fill) */
     float x3 = x1 + uw;
     if (x3 < W)
         draw_text_source(ctx->ts_ticker, x3, yt);
@@ -390,7 +450,7 @@ void render_ticker(BroadcastContext *ctx)
  * REDES SOCIAIS
  * ============================================================================
  * Painel lateral com as redes activas. Tags em bold 14pt + handles 20pt.
- * Posição configurável (4 cantos).
+ * Posicao configuravel (4 cantos). Opacidade controlada via WebSocket.
  */
 void render_social_media(BroadcastContext *ctx)
 {
@@ -422,7 +482,9 @@ void render_social_media(BroadcastContext *ctx)
     const float gp  = 4.0f;    /* gap entre items */
     const float mg  = 20.0f;   /* margem exterior */
 
-    /* Calcula largura máxima do painel */
+    float soc_opacity = ctx->opacity_global * ctx->opacity_social;
+
+    /* Calcula largura maxima do painel */
     float panel_w = 0.0f, panel_h = 0.0f;
     for (int i = 0; i < count; i++) {
         int j        = items[i].idx;
@@ -447,12 +509,13 @@ void render_social_media(BroadcastContext *ctx)
             bx = W - panel_w - mg; by = mg; break;
         case SOCIAL_BOTTOM_LEFT:
             bx = mg;             by = H - panel_h - mg - TICKER_BAR_HEIGHT - 10.0f; break;
-        default: /* SOCIAL_BOTTOM_RIGHT */
+        default:
             bx = W - panel_w - mg; by = H - panel_h - mg - TICKER_BAR_HEIGHT - 10.0f; break;
     }
 
-    /* Fundo glass (horizontal) */
-    draw_rect_glass(ctx, bx, by, panel_w, panel_h, ctx->color_bg, false);
+    /* Fundo glass com opacidade */
+    uint32_t soc_bg = apply_opacity(ctx->color_bg, soc_opacity);
+    draw_rect_glass(ctx, bx, by, panel_w, panel_h, soc_bg, false);
 
     float cy = by + py;
     for (int i = 0; i < count; i++) {
@@ -463,13 +526,15 @@ void render_social_media(BroadcastContext *ctx)
         /* Tag em bold */
         draw_text_source(ctx->ts_social_tag[j], tx, ty + 2.0f);
 
-        /* Handle em regular, à direita da tag */
-        float tag_w = get_src_width(ctx->ts_social_tag[j], tags[j], fs_tag);
+        /* Handle em regular, a direita da tag */
+        float tag_w = get_src_width(ctx->ts_social_tag[j], SOCIAL_TAGS[j], fs_tag);
         draw_text_source(ctx->ts_social_handle[j], tx + tag_w + 8.0f, ty);
 
-        /* Separador (excepto no último item) */
-        if (i < count - 1)
-            draw_rect(bx + 10.0f, cy + ih, panel_w - 20.0f, 1.0f, 0x33FFFFFF);
+        /* Separador (exceto no ultimo item) */
+        if (i < count - 1) {
+            uint32_t sep_color = apply_opacity(0x33FFFFFF, soc_opacity);
+            draw_rect(bx + 10.0f, cy + ih, panel_w - 20.0f, 1.0f, sep_color);
+        }
 
         cy += ih + gp;
     }

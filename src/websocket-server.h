@@ -17,6 +17,23 @@
  *   { "command": "ticker",      "text": "...", "speed": 100.0, "enabled": true }
  *   { "command": "social",      "instagram": "@...", "tiktok": "@...", ... }
  *
+ *   ── Opacity (0.0 = invisivel, 1.0 = opaco) ─────────────────────────
+ *   { "command": "opacity",
+ *     "global": 0.8,       // Opacidade global
+ *     "lower_third": 1.0,  // Lower Third (opcional)
+ *     "gc": 0.5,           // GC (opcional)
+ *     "ticker": 0.7,       // Ticker (opcional)
+ *     "social": 0.6        // Redes sociais (opcional)
+ *   }
+ *
+ *   ── Animation ───────────────────────────────────────────────────────
+ *   { "command": "animate",
+ *     "target": "gc",          // Apenas "gc" por enquanto
+ *     "animation": "fade",     // "fade" | "scale" | "slide"
+ *     "duration": 2.0,          // Duracao em segundos (opcional)
+ *     "direction": "up"        // "up" | "down" | "left" | "right" (slide)
+ *   }
+ *
  * Uso:
  *   WebSocketServer ws;
  *   ws.start(8080);

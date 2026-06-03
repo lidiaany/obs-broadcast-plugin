@@ -39,6 +39,7 @@
 #define TICKER_BAR_HEIGHT     40
 #define LOWER_THIRD_HEIGHT    120
 #define OVERLAY_PADDING       20
+#define GC_ANIM_DURATION      0.5f
 
 /* ============================================================================
  * CORES PADRÃO (formato ARGB)
@@ -98,6 +99,13 @@ struct BroadcastContext {
     char   *facebook;
     char   *youtube;
 
+    /* ── OPACIDADE (0.0 = invisivel, 1.0 = opaco) ────────────────────── */
+    float opacity_global;
+    float opacity_lt;
+    float opacity_gc;
+    float opacity_ticker;
+    float opacity_social;
+
     /* ── CORES ─────────────────────────────────────────────────────────── */
     uint32_t color_primary;
     uint32_t color_secondary;
@@ -115,6 +123,13 @@ struct BroadcastContext {
     bool     lt_is_visible;
     float    lt_visible_time;
     float    ticker_offset;
+
+    /* ── ANIMACAO GC ──────────────────────────────────────────────────── */
+    float   gc_anim_progress;    /* 0.0 -> 1.0 durante animacao */
+    int     gc_anim_state;       /* 1 = entrando, 0 = parado, -1 = saindo */
+    char   *gc_anim_type;        /* "fade", "scale", "slide" */
+    char   *gc_anim_dir;         /* "up", "down", "left", "right" (slide) */
+    float   gc_anim_duration;    /* duracao em segundos */
 
     /* ── WEBSOCKET SERVER ──────────────────────────────────────────────── */
     WebSocketServer *ws_server;
