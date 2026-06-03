@@ -1,15 +1,43 @@
-cmake_minimum_required(VERSION 3.16)
+﻿cmake_minimum_required(VERSION 3.28...3.30)
 
-project(obs-broadcast-plugin VERSION 1.0.0 LANGUAGES CXX)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/common/bootstrap.cmake" NO_POLICY_SCOPE)
+
+project(${_name} VERSION ${_version} LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# ── Find OBS SDK ──────────────────────────────────────────────────────────
-find_package(libobs REQUIRED)
+option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" OFF)
+option(ENABLE_QT "Use Qt functionality" OFF)
 
-# ── Sources ───────────────────────────────────────────────────────────────
+include(compilerconfig)
+include(defaults)
+include(helpers)
+
+add_library(${CMAKE_PROJECT_NAME} MODULE)
+
+find_package(libobs REQUIRED)
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs)
+
+if(ENABLE_FRONTEND_API)
+  find_package(obs-frontend-api REQUIRED)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::obs-frontend-api)
+endif()
+
+if(ENABLE_QT)
+  find_package(Qt6 COMPONENTS Widgets Core)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Widgets)
+  target_compile_options(
+    ${CMAKE_PROJECT_NAME}
+    PRIVATE $<$<C_COMPILER_ID:Clang,AppleClang>:-Wno-quoted-include-in-framework-header -Wno-comma>
+  )
+  set_target_properties(
+    ${CMAKE_PROJECT_NAME}
+    PROPERTIES AUTOMOC ON AUTOUIC ON AUTORCC ON
+  )
+endif()
+
 set(SOURCES
     src/plugin-main.cpp
     src/broadcast-source.cpp
@@ -23,63 +51,12 @@ set(HEADERS
     src/websocket-server.h
 )
 
-# ── Plugin library ────────────────────────────────────────────────────────
-add_library(${PROJECT_NAME} MODULE
-    ${SOURCES}
-    ${HEADERS}
-)
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE ${SOURCES} ${HEADERS})
+target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-target_include_directories(${PROJECT_NAME} PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
-
-target_link_libraries(${PROJECT_NAME} PRIVATE
-    OBS::libobs
-)
-
-# ── Platform-specific ────────────────────────────────────────────────────
 if(WIN32)
-    target_link_libraries(${PROJECT_NAME} PRIVATE
-        ws2_32
-    )
-    target_compile_definitions(${PROJECT_NAME} PRIVATE
-        _CRT_SECURE_NO_WARNINGS
-    )
+    target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE ws2_32)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
-# ── Compiler flags ────────────────────────────────────────────────────────
-if(MSVC)
-    target_compile_options(${PROJECT_NAME} PRIVATE
-        /W3
-        /utf-8
-    )
-else()
-    target_compile_options(${PROJECT_NAME} PRIVATE
-        -Wall
-        -Wextra
-        -Wno-unused-parameter
-        -Wno-missing-field-initializers
-    )
-endif()
-
-# ── Output naming ────────────────────────────────────────────────────────
-set_target_properties(${PROJECT_NAME} PROPERTIES
-    PREFIX ""
-)
-
-# ── Install rules ────────────────────────────────────────────────────────
-install(TARGETS ${PROJECT_NAME}
-    LIBRARY DESTINATION obs-plugins
-    RUNTIME DESTINATION obs-plugins
-)
-
-install(DIRECTORY data/
-    DESTINATION data/obs-plugins/${PROJECT_NAME}
-)
-
-message(STATUS "========================================")
-message(STATUS "  OBS Broadcast Overlay Plugin v${PROJECT_VERSION}")
-message(STATUS "  Build type: ${CMAKE_BUILD_TYPE}")
-message(STATUS "  C++ Standard: ${CMAKE_CXX_STANDARD}")
-message(STATUS "  WebSocket: built-in (port 8080)")
-message(STATUS "========================================")
+set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
